@@ -1,0 +1,33 @@
+# Python-generated files
+__pycache__/
+*.py[cod]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local runtime data
+/config.yaml
+/models/
+/data/
+*.log
+
+# Frontend
+node_modules/
+frontend/dist/
+/.devdata/
+playwright-report/
+test-results/
+.playwright-mcp/

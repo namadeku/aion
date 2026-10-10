@@ -1,0 +1,20 @@
+name: system
+title: Управление компьютером
+version: 1.1.0
+author: Aion
+description: >-
+  Громкость (точно, в процентах), музыка в любом плеере — включить, пауза, следующий трек, что
+  играет, — блокировка, скриншот, выключение и перезагрузка.
+permissions: [system]
+settings:
+  volume_step:
+    type: int
+    title: Шаг громкости, %
+    default: 10
+    min: 2
+    max: 30
+  music_app:
+    type: string
+    title: Плеер по умолчанию
+    description: Откроется на «включи музыку», если ни один плеер не запущен, например «Яндекс Музыка»
+    default: ""

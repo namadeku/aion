@@ -1,0 +1,42 @@
+name: companion
+title: Инициатива в тишине
+version: 1.0.0
+author: Aion
+description: >-
+  Персонаж сам заговаривает после долгой тишины, здоровается, когда вы возвращаетесь к
+  компьютеру, напоминает о перерыве и о сне. Не мешает в играх и при просмотре видео на весь
+  экран. Частоту реплик задаёт «Болтливость» на странице LLM.
+settings:
+  silence_minutes:
+    type: int
+    title: Заговорить после тишины (мин)
+    default: 40
+    min: 10
+    max: 240
+  break_minutes:
+    type: int
+    title: Напоминать о перерыве через (мин)
+    description: 0 — не напоминать
+    default: 120
+    min: 0
+    max: 480
+  quiet_from:
+    type: int
+    title: Не начинать разговор с (час)
+    default: 23
+    min: 0
+    max: 23
+  quiet_to:
+    type: int
+    title: До (час)
+    default: 9
+    min: 0
+    max: 23
+  greet_return:
+    type: bool
+    title: Здороваться, когда вы вернулись к компьютеру
+    default: true
+  night_reminder:
+    type: bool
+    title: Напоминать о сне глубокой ночью
+    default: true

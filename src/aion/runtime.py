@@ -1,0 +1,303 @@
+"""Running the assistant: voice, web UI, desktop window, tray and hotkey together."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import random
+import sys
+import threading
+import webbrowser
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from loguru import logger
+from rich.console import Console
+
+from aion.app import Aion, console_speech
+from aion.config import Config, ConfigStore
+from aion.core.events import AssistantReply, SpeechRecognized
+from aion.models import Progress
+
+if TYPE_CHECKING:
+    from aion.ui.mascot import DesktopMascot
+    from aion.ui.server import UiServer
+
+EXIT_WORDS = {"выход", "exit", "quit", ":q"}
+
+
+@dataclass
+class RunOptions:
+    voice: bool = True
+    ui: bool = True
+    window: bool = True
+    open_browser: bool = True
+    console_input: bool = True
+    greet: bool = True
+
+
+@dataclass
+class Session:
+    """Handles shared between the asyncio thread and the main (window) thread."""
+
+    loop: asyncio.AbstractEventLoop | None = None
+    aion: Aion | None = None
+    server: UiServer | None = None
+    url: str | None = None
+    stop: asyncio.Event | None = None
+    ready: threading.Event = field(default_factory=threading.Event)
+    error: BaseException | None = None
+
+    def request_stop(self) -> None:
+        if self.loop is not None and self.stop is not None and not self.loop.is_closed():
+            self.loop.call_soon_threadsafe(self.stop.set)
+
+    def toggle_mute(self) -> None:
+        aion = self.aion
+        if self.loop is not None and aion is not None and aion.voice is not None:
+            voice = aion.voice
+            self.loop.call_soon_threadsafe(lambda: voice.set_muted(not voice.muted))
+
+    def push_to_talk(self) -> None:
+        loop, aion = self.loop, self.aion
+        if loop is not None and aion is not None and aion.voice is not None:
+            voice = aion.voice
+            loop.call_soon_threadsafe(lambda: loop.create_task(voice.push_to_talk()))
+
+
+async def serve(  # noqa: PLR0915 - startup orchestration
+    store: ConfigStore,
+    options: RunOptions,
+    session: Session,
+    progress: Progress | None = None,
+    console: Console | None = None,
+) -> None:
+    from aion.ui.desktop import Hotkey, set_autostart
+
+    session.loop = asyncio.get_running_loop()
+    session.loop.set_exception_handler(_quiet_connection_resets)
+    session.stop = asyncio.Event()
+
+    if options.voice:
+        from aion.voice import voice_output_factory
+
+        speech = voice_output_factory(store, progress)
+    else:
+        speech = console_speech
+    aion = Aion(store, speech=speech)
+    session.aion = aion
+
+    if console is not None:
+        _echo_dialog(aion, console, voice=options.voice)
+
+    def on_config(config: Config, sections: set[str]) -> None:
+        if "ui" in sections:
+            with contextlib.suppress(Exception):
+                set_autostart(config.ui.autostart)
+
+    store.subscribe(on_config)
+
+    hotkey: Hotkey | None = None
+    server = None
+    async with aion:
+        try:
+            if options.ui:
+                from aion.ui.server import UiServer
+
+                server = UiServer(aion)
+                server.maintenance.request_quit = session.request_stop
+                await server.start()
+                session.server = server
+                session.url = server.url
+            if options.voice:
+                from aion.tts.output import VoiceOutput
+                from aion.voice import create_pipeline
+
+                assert isinstance(aion.speech, VoiceOutput)
+                await aion.speech.warm_up()
+                pipeline = await create_pipeline(aion, progress)
+                aion.voice = pipeline
+                await pipeline.start()
+                if aion.config.ui.push_to_talk:
+                    hotkey = Hotkey(
+                        aion.config.ui.push_to_talk, session.loop, pipeline.push_to_talk
+                    )
+                    hotkey.start()
+        except BaseException as e:
+            session.error = e
+            session.ready.set()
+            raise
+        session.ready.set()
+
+        if options.greet:
+            await aion.dialog.say(greeting(aion.config), emotion="joy", wait=False)
+
+        tasks: list[asyncio.Task[object]] = [asyncio.create_task(session.stop.wait())]
+        if options.console_input and sys.stdin is not None and sys.stdin.isatty():
+            tasks.append(asyncio.create_task(_console_input(aion)))
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in tasks:
+            task.cancel()
+
+        if hotkey is not None:
+            hotkey.stop()
+        if server is not None:
+            await server.stop()
+
+
+def greeting(config: Config, now: datetime | None = None) -> str:
+    """A varied, time-of-day aware greeting."""
+    hour = (now or datetime.now()).hour
+    if 5 <= hour < 12:
+        hello = "Доброе утро"
+    elif 12 <= hour < 17:
+        hello = "Добрый день"
+    elif 17 <= hour < 23:
+        hello = "Добрый вечер"
+    else:
+        hello = "Доброй ночи"
+    address = config.assistant.user_address
+    female = config.profile.gender == "female"
+    tails = [
+        "Я на связи.",
+        "Чем займёмся?",
+        "Рада тебя слышать." if female else "Рад вас слышать.",
+        "Как настроение?",
+        f"{config.profile.name} к вашим услугам.",
+    ]
+    return f"{hello}, {address}. {random.choice(tails)}"
+
+
+def _quiet_connection_resets(loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:
+    """Windows' proactor loop logs a traceback whenever a browser drops a socket; ignore it."""
+    if isinstance(context.get("exception"), ConnectionResetError):
+        return
+    loop.default_exception_handler(context)
+
+
+def _echo_dialog(aion: Aion, console: Console, *, voice: bool) -> None:
+    def user(e: SpeechRecognized) -> None:
+        if e.source != "text":
+            console.print(f"[bold green]Вы:[/] {e.text}")
+
+    def reply(e: AssistantReply) -> None:
+        if e.text:
+            console.print(f"[bold cyan]{aion.config.profile.name}:[/] {e.text}")
+
+    aion.bus.subscribe(SpeechRecognized, user)
+    if voice:  # in text mode ConsoleOutput prints replies itself
+        aion.bus.subscribe(AssistantReply, reply)
+
+
+async def _console_input(aion: Aion) -> None:
+    while True:
+        try:
+            line = await asyncio.to_thread(input, "")
+        except EOFError:  # no console (background, shortcut): keep running without it
+            await asyncio.Event().wait()
+            return
+        if line.strip().lower() in EXIT_WORDS:
+            return
+        await aion.dialog.submit(line, source="text")
+
+
+def run(
+    store: ConfigStore, options: RunOptions, progress: Progress | None, console: Console
+) -> None:
+    """Blocking entry point used by ``aion run``."""
+    from aion.ui.desktop import hold_instance_mutex
+
+    hold_instance_mutex()
+    session = Session()
+    if not (options.ui and options.window):
+        if options.ui:
+            _open_browser_when_ready(session, launch=options.open_browser)
+        with contextlib.suppress(KeyboardInterrupt):
+            asyncio.run(serve(store, options, session, progress, console))
+        return
+
+    # Window mode: the core runs in a background thread, pywebview owns the main thread.
+    def core() -> None:
+        try:
+            asyncio.run(serve(store, options, session, progress, console))
+        except Exception as e:  # reported to the main thread
+            session.error = session.error or e
+            session.ready.set()
+
+    thread = threading.Thread(target=core, name="aion-core", daemon=True)
+    thread.start()
+    session.ready.wait()
+    if session.error is not None or session.url is None:
+        thread.join(5)
+        raise RuntimeError(f"Не удалось запустить: {session.error}")
+
+    from aion.ui.desktop import Tray, Window
+
+    name = store.config.profile.name
+    window = Window(name, session.url)
+    mascot = _desktop_mascot(store, session, window)
+    if session.server is not None:  # an update closes the window too
+        session.server.maintenance.request_quit = lambda: _quit(session, window, mascot)
+    tray = None
+    if store.config.ui.tray:
+        tray = Tray(
+            name,
+            on_open=window.show,
+            on_toggle_mute=session.toggle_mute,
+            is_muted=lambda: bool(session.aion and session.aion.voice and session.aion.voice.muted),
+            on_quit=lambda: _quit(session, window, mascot),
+            on_toggle_desktop=mascot.toggle if mascot else None,
+            is_desktop=lambda: bool(mascot and mascot.enabled),
+        )
+        tray.start()
+    try:
+        if not window.run():
+            logger.warning("pywebview недоступен — открываю интерфейс в браузере")
+            webbrowser.open(session.url)
+            with contextlib.suppress(KeyboardInterrupt):
+                thread.join()
+    finally:
+        if mascot is not None:
+            mascot.close()
+        session.request_stop()
+        if tray is not None:
+            tray.stop()
+        thread.join(10)
+
+
+def _desktop_mascot(store: ConfigStore, session: Session, window: object) -> DesktopMascot | None:
+    """The "character on the desktop" mode (Windows only, needs the UI server)."""
+    from aion.ui import mascot
+
+    if not mascot.available() or session.server is None or session.url is None:
+        return None
+    controller = mascot.DesktopMascot(
+        url=session.url,
+        main_window=window,
+        send=session.server.send_threadsafe,
+        push_to_talk=session.push_to_talk,
+        scale=store.config.ui.desktop_scale,
+    )
+    session.server.desktop = controller
+    return controller
+
+
+def _quit(session: Session, window: object, mascot: DesktopMascot | None = None) -> None:
+    if mascot is not None:
+        mascot.close()
+    session.request_stop()
+    close = getattr(window, "close", None)
+    if close is not None:
+        close()
+
+
+def _open_browser_when_ready(session: Session, *, launch: bool = True) -> None:
+    def wait_and_open() -> None:
+        session.ready.wait()
+        if session.url:
+            logger.info("Интерфейс: {}", session.url)
+            if launch:
+                webbrowser.open(session.url)
+
+    threading.Thread(target=wait_and_open, daemon=True).start()

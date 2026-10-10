@@ -1,0 +1,17 @@
+name: apps
+title: Программы и сайты
+version: 1.0.0
+author: Aion
+description: Запуск программ (по ярлыкам меню «Пуск»), сайтов и папок, поиск в интернете.
+permissions: [system, network]
+settings:
+  search_engine:
+    type: enum
+    title: Поисковик
+    options: [google, yandex, duckduckgo, bing]
+    default: google
+  aliases:
+    type: text
+    title: Свои команды
+    description: "По строке на команду: «имя = программа, путь или адрес». Например: «рабочий проект = C:\\work\\project»"
+    default: ""

@@ -1,0 +1,6 @@
+name: calc
+title: Калькулятор
+version: 1.0.0
+author: Aion
+description: Арифметика голосом, перевод единиц измерения и валют (курс ЦБ РФ).
+permissions: [network]

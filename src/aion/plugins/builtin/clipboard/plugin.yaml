@@ -1,0 +1,13 @@
+name: clipboard
+title: Буфер обмена
+version: 1.0.0
+author: Aion
+description: «Прочитай, что скопировано», «переведи скопированное», «перескажи скопированное».
+permissions: [clipboard]
+settings:
+  max_chars:
+    type: int
+    title: Сколько символов читать вслух
+    default: 600
+    min: 100
+    max: 5000

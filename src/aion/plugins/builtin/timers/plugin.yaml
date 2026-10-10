@@ -1,0 +1,13 @@
+name: timers
+title: Таймеры и напоминания
+version: 1.0.0
+author: Aion
+description: Таймеры, будильники и напоминания. Переживают перезапуск ассистента.
+permissions: [notifications]
+settings:
+  missed_grace_hours:
+    type: float
+    title: Сообщать о пропущенных (часов)
+    description: Если ассистент был выключен, сообщить о сработавших за это время напоминаниях
+    default: 12
+    min: 0

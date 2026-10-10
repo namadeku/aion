@@ -1,0 +1,22 @@
+name: dota2
+title: Dota 2
+version: 1.0.0
+author: Aion
+description: >-
+  Комментирует игры Dota 2: пик героя, убийства и серии, смерти, ульту, Aegis и итог игры.
+  Данные идут через официальный Game State Integration. В Steam добавьте игре параметр
+  запуска -gamestateintegration.
+permissions: [files]
+enabled_by_default: false  # writes a config into the game folder
+settings:
+  port:
+    type: int
+    title: Порт для данных игры
+    default: 3011
+    min: 1024
+    max: 65535
+  install_config:
+    type: bool
+    title: Создать конфиг интеграции в папке игры
+    description: Файл game/dota/cfg/gamestate_integration/gamestate_integration_aion.cfg
+    default: true

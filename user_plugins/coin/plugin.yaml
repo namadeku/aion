@@ -1,0 +1,12 @@
+name: coin
+title: Монетка и кубик
+version: 1.0.0
+author: Aion examples
+description: Пример пользовательского плагина — монетка, кубик, счётчик бросков, уточняющий вопрос.
+settings:
+  dice_sides:
+    type: int
+    title: Граней у кубика
+    default: 6
+    min: 2
+    max: 100

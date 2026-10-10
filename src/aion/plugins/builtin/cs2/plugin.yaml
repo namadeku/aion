@@ -1,0 +1,21 @@
+name: cs2
+title: Counter-Strike 2
+version: 1.0.0
+author: Aion
+description: >-
+  Комментирует матчи CS2: мультикиллы, смерти, раунды, бомбу и итог матча. Данные идут
+  через официальный Game State Integration — безопасно для VAC.
+permissions: [files]
+enabled_by_default: false  # writes a config into the game folder
+settings:
+  port:
+    type: int
+    title: Порт для данных игры
+    default: 3010
+    min: 1024
+    max: 65535
+  install_config:
+    type: bool
+    title: Создать конфиг интеграции в папке игры
+    description: Файл gamestate_integration_aion.cfg в game/csgo/cfg; после создания перезапустите игру
+    default: true

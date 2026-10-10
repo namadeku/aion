@@ -1,0 +1,24 @@
+name: screen
+title: Экран
+version: 1.0.0
+author: Aion
+description: >-
+  Смотрит на ваш экран по просьбе: «что у меня на экране», «прочитай», «переведи текст на
+  экране», а модель может сама заглянуть, чтобы ответить на вопрос. Снимок разбирает локальная
+  vision-модель в Ollama и никуда не отправляется (если Ollama работает на этом компьютере).
+permissions: [network]
+settings:
+  model:
+    type: string
+    title: Vision-модель Ollama
+    description: >-
+      Скачайте один раз — ollama pull qwen3-vl:4b-instruct. Берите instruct-версии: «думающие»
+      рассуждают про себя и отвечают в несколько раз дольше
+    default: qwen3-vl:4b-instruct
+  max_side:
+    type: int
+    title: Размер снимка (пикселей по длинной стороне)
+    description: Больше — лучше читает мелкий текст, но дольше думает
+    default: 1280
+    min: 640
+    max: 2560

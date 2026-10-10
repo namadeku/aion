@@ -1,0 +1,5 @@
+name: assistant
+title: Ассистент
+version: 1.0.0
+author: Aion
+description: Имя и обращение, «что ты умеешь», «повтори», «стоп», вежливость.

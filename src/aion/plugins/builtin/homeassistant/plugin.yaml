@@ -1,0 +1,23 @@
+name: homeassistant
+title: Умный дом (Home Assistant)
+version: 1.0.0
+author: Aion
+description: >-
+  Пример интеграции: включение и выключение устройств и чтение датчиков через REST API
+  Home Assistant. Используйте как образец для своих плагинов.
+permissions: [network]
+enabled_by_default: false
+settings:
+  url:
+    type: string
+    title: Адрес Home Assistant
+    default: http://homeassistant.local:8123
+  token:
+    type: secret
+    title: Долгоживущий токен доступа
+    description: Профиль → Безопасность → Долгосрочные токены доступа
+    env: HOME_ASSISTANT_TOKEN
+  domains:
+    type: string
+    title: Какими устройствами управлять
+    default: light, switch, fan, cover, media_player, climate

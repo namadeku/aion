@@ -1,0 +1,11 @@
+name: weather
+title: Погода
+version: 1.0.0
+author: Aion
+description: Текущая погода и прогноз на завтра (Open-Meteo, без ключа).
+permissions: [network]
+settings:
+  city:
+    type: string
+    title: Город по умолчанию
+    default: Москва

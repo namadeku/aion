@@ -1,0 +1,16 @@
+name: valorant
+title: Valorant
+version: 1.0.0
+author: Aion
+description: >-
+  Комментирует матчи Valorant: поиск матча, раунды, серии, матч-поинт и итог. Читает только
+  статус игрока из локального API клиента Riot (как трекеры), память игры не трогает.
+permissions: [network]
+enabled_by_default: false
+settings:
+  poll_seconds:
+    type: float
+    title: Как часто проверять статус (с)
+    default: 2
+    min: 1
+    max: 10
