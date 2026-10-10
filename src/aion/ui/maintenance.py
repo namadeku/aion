@@ -39,6 +39,7 @@ class Maintenance:
         self.request_quit: Callable[[], None] | None = None
 
     def start(self) -> None:
+        updater.clean_downloads(self.aion.config.paths.data_dir / "updates")
         if updater.supported() and self.aion.config.updates.auto_check:
             self._spawn(self._auto_check())
 

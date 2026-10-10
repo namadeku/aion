@@ -7,6 +7,7 @@ the installer waits for Aion to exit, replaces the files and starts the new vers
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import re
 import subprocess
@@ -111,6 +112,15 @@ async def download(release: Release, folder: Path, progress: Progress | None = N
         target.unlink(missing_ok=True)
         raise ValueError("Контрольная сумма установщика не совпала — загрузка повреждена")
     return target
+
+
+def clean_downloads(folder: Path) -> None:
+    """Remove installers of versions that are already installed (run after an update)."""
+    for path in folder.glob("Aion-Setup-*.exe"):
+        version = path.stem.removeprefix("Aion-Setup-")
+        with contextlib.suppress(ValueError, OSError):
+            if not is_newer(version):
+                path.unlink()
 
 
 def launch_installer(installer: Path) -> None:

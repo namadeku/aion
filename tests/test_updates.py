@@ -91,6 +91,14 @@ async def test_download_verifies_checksum(tmp_path: Path, monkeypatch: pytest.Mo
     assert not (tmp_path / "Aion-Setup-0.4.0.exe").exists()
 
 
+def test_clean_downloads_keeps_only_newer(tmp_path: Path) -> None:
+    for version in ("0.0.1", updater.__version__, "999.0.0"):
+        (tmp_path / f"Aion-Setup-{version}.exe").write_bytes(b"x")
+    updater.clean_downloads(tmp_path)
+    assert [p.name for p in tmp_path.iterdir()] == ["Aion-Setup-999.0.0.exe"]
+    updater.clean_downloads(tmp_path / "missing")  # no folder yet: nothing to do
+
+
 def test_self_update_only_in_installed_public_build(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(updater, "is_public", lambda: True)
     monkeypatch.setattr(updater, "is_installed", lambda: False)
