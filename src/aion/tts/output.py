@@ -76,6 +76,8 @@ class VoiceOutput(SpeechOutput):
         self._engines: dict[str, TtsEngine] = {}
         self._ahead: dict[str, deque[asyncio.Task[Audio]]] = defaultdict(deque)
         self._synth_lock = asyncio.Lock()
+        # engines that failed to load (e.g. Silero without torch): speak with Piper instead
+        self._unavailable: set[str] = set()
 
     @property
     def voice(self) -> VoiceConfig:
@@ -122,6 +124,8 @@ class VoiceOutput(SpeechOutput):
 
     async def _synthesize(self, text: str) -> Audio:
         async with self._synth_lock:
+            if self.voice.engine in self._unavailable:
+                return await self._render_offline(text)
             engine = self.engine()
             try:
                 return await render_voice(engine, text, self.voice)
@@ -131,10 +135,11 @@ class VoiceOutput(SpeechOutput):
                     raise
                 # online voice unavailable (no internet?): keep talking with an offline one
                 logger.warning("{} недоступен ({}), говорю офлайн-голосом", self.voice.engine, e)
-                fallback = self.voice.model_copy(
-                    update={"engine": "piper", "voice": self.offline_voice()}
-                )
-                return await render_voice(self.engine("piper"), text, fallback)
+                return await self._render_offline(text)
+
+    async def _render_offline(self, text: str) -> Audio:
+        fallback = self.voice.model_copy(update={"engine": "piper", "voice": self.offline_voice()})
+        return await render_voice(self.engine("piper"), text, fallback)
 
     def offline_voice(self) -> str:
         female = self.store.config.profile.gender == "female"
@@ -149,6 +154,9 @@ class VoiceOutput(SpeechOutput):
             await engine.prepare(self.voice.voice)
             await render_voice(engine, "Готово.", self.voice)
         except Exception as e:
-            if engine.offline:
+            if engine.offline and self.voice.engine == "piper":
                 raise
             logger.warning("Голос {} пока недоступен: {}", self.voice.engine, e)
+            if engine.offline:  # a missing local engine will not come back by itself
+                self._unavailable.add(self.voice.engine)
+                await self.engine("piper").prepare(self.offline_voice())

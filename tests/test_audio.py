@@ -299,3 +299,44 @@ async def test_online_voice_falls_back_to_offline(app_store: ConfigStore) -> Non
     audio = await out._synthesize("Привет")  # pyright: ignore[reportPrivateUsage]
     assert audio.samples.size == 100
     assert used == ["ru_RU-irina-medium"]
+
+
+async def test_missing_local_engine_falls_back_to_piper(app_store: ConfigStore) -> None:
+    """Silero without torch (the installer build) must not stop the assistant."""
+    from aion.audio.player import AudioPlayer
+    from aion.core import EventBus, StateMachine
+    from aion.tts.base import Audio, TtsEngine, VoiceInfo
+    from aion.tts.output import VoiceOutput
+
+    class Missing(TtsEngine):
+        name = "silero"
+
+        async def prepare(self, voice: str) -> None:
+            raise RuntimeError("Для Silero установите extra")
+
+        async def synthesize(self, text: str, *, voice: str, rate: float = 1.0) -> Audio:
+            raise AssertionError("must not be used")
+
+        async def voices(self, language: str = "ru") -> list[VoiceInfo]:
+            return []
+
+    used: list[str] = []
+
+    class Offline(TtsEngine):
+        name = "piper"
+
+        async def synthesize(self, text: str, *, voice: str, rate: float = 1.0) -> Audio:
+            used.append(voice)
+            return Audio(np.zeros(100, dtype=np.float32), 22050)
+
+        async def voices(self, language: str = "ru") -> list[VoiceInfo]:
+            return []
+
+    app_store.update({"profiles": {"aion": {"voice": {"engine": "silero"}}}}, save=False)
+    bus = EventBus()
+    out = VoiceOutput(bus, StateMachine(bus), app_store, AudioPlayer())
+    out._engines = {"silero": Missing(Path(".")), "piper": Offline(Path("."))}  # pyright: ignore[reportPrivateUsage]
+    await out.warm_up()
+    audio = await out._synthesize("Привет")  # pyright: ignore[reportPrivateUsage]
+    assert audio.samples.size == 100
+    assert used == ["ru_RU-denis-medium"]

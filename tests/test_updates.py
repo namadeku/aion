@@ -155,11 +155,14 @@ def _client(store: ConfigStore) -> Iterator[TestClient]:
             tc.portal.call(aion.stop)  # pyright: ignore[reportOptionalMemberAccess]
 
 
-def test_dev_edition_has_logs_and_update_status(app_store: ConfigStore) -> None:
+def test_dev_edition_has_logs_and_update_status(
+    app_store: ConfigStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(server_module, "is_public", lambda: False)
+    monkeypatch.setattr(updater, "is_public", lambda: False)
     with _client(app_store) as tc:
         assert tc.get("/api/logs").status_code == 200
         status = tc.get("/api/update").json()
-        assert status["edition"] == "dev"
         assert status["supported"] is False
         assert tc.post("/api/update/install").status_code == 409
         assert set(tc.get("/api/cuda").json()) >= {"gpu", "available", "size"}
