@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -145,3 +146,39 @@ def test_mcp_servers_add_list_delete(client: Any) -> None:
     assert tc.delete("/api/mcp/shop").status_code == 200
     assert aion.config.mcp == {}
     assert tc.delete("/api/mcp/shop").status_code == 404
+
+
+def test_startup_progress_is_reported(app_store: ConfigStore, monkeypatch: Any) -> None:
+    aion = Aion(app_store, speech=lambda b, s, _c: NullOutput(b, s), watch_plugins=False)
+    server = UiServer(aion, token=TOKEN)
+    sent: list[dict[str, Any]] = []
+    monkeypatch.setattr(server, "send_threadsafe", sent.append)
+
+    server.set_startup("loading")
+    server.report_download("Голос Piper", 10, 100)
+    server.report_download("Голос Piper", 20, 100)  # throttled
+    assert len(sent) == 2
+    assert sent[-1]["downloads"] == [{"label": "Голос Piper", "done": 10, "total": 100}]
+    assert server.snapshot()["startup"]["downloads"][0]["done"] == 20  # state is current
+
+    server.report_download("Голос Piper", 100, 100)  # finished: always sent
+    assert sent[-1]["downloads"] == []
+    server.report_download("Vosk", 5, 0)  # unknown size stays until the stage changes
+    server.set_startup("failed", "ConnectError: huggingface.co")
+    assert sent[-1] == {
+        "type": "startup",
+        "stage": "failed",
+        "error": "ConnectError: huggingface.co",
+        "voice_enabled": False,
+        "downloads": [],
+    }
+
+
+async def test_busy_port_is_reported(app: Aion) -> None:
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        app.store.update({"ui": {"port": busy.getsockname()[1]}})
+        # uvicorn exits the process on bind errors: this must stay a normal exception
+        with pytest.raises(RuntimeError, match="Не удалось открыть порт"):
+            await UiServer(app, token=TOKEN).start()

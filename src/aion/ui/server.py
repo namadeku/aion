@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
 STATIC_DIR = Path(__file__).parent / "static"
 LEVEL_EVENT_INTERVAL = 1 / 30
+DOWNLOAD_EVENT_INTERVAL = 0.25
 SECRET_NAMES = ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "HOME_ASSISTANT_TOKEN")
 
 
@@ -79,6 +80,10 @@ class UiServer:
         self._loop: asyncio.AbstractEventLoop | None = None
         # desktop mascot controller (aion.ui.mascot.DesktopMascot), set by the desktop app
         self.desktop: Any = None
+        # startup progress shown by the page: "loading" (voice models), "ready" or "failed"
+        self.startup: dict[str, Any] = {"stage": "ready", "error": None}
+        self._downloads: dict[str, tuple[int, int]] = {}
+        self._download_sent: dict[str, float] = {}
         self.maintenance = Maintenance(app, self._broadcast_raw)
         self.api = self._build()
         app.bus.subscribe("*", self._broadcast)
@@ -108,7 +113,15 @@ class UiServer:
         )
         self._server = uvicorn.Server(config)
         self._server.install_signal_handlers = lambda: None  # pyright: ignore[reportAttributeAccessIssue]
-        task = asyncio.get_running_loop().create_task(self._server.serve(), name="ui-server")
+        server = self._server
+
+        async def serve() -> None:
+            # uvicorn calls sys.exit(1) when the port is busy; SystemExit would escape the
+            # loop and kill the app silently, so end the task and let the check below report it
+            with contextlib.suppress(SystemExit):
+                await server.serve()
+
+        task = asyncio.get_running_loop().create_task(serve(), name="ui-server")
         while not self._server.started:
             if task.done():
                 raise RuntimeError(
@@ -157,6 +170,36 @@ class UiServer:
             return
         loop.call_soon_threadsafe(lambda: loop.create_task(self._broadcast_raw(message)))
 
+    def set_startup(self, stage: str, error: str | None = None) -> None:
+        self.startup = {"stage": stage, "error": error}
+        self._downloads.clear()  # unfinished ones failed or had no known size
+        self.send_threadsafe(self._startup_message())
+
+    def report_download(self, label: str, done: int, total: int) -> None:
+        """Model download progress (``aion.models.Progress``), callable from any thread."""
+        finished = bool(total) and done >= total
+        if finished:
+            self._downloads.pop(label, None)
+            self._download_sent.pop(label, None)
+        else:
+            self._downloads[label] = (done, total)
+            now = time.monotonic()
+            if now - self._download_sent.get(label, 0) < DOWNLOAD_EVENT_INTERVAL:
+                return
+            self._download_sent[label] = now
+        self.send_threadsafe(self._startup_message())
+
+    def _startup_message(self) -> dict[str, Any]:
+        return {
+            "type": "startup",
+            **self.startup,
+            "voice_enabled": self.aion.voice is not None,
+            "downloads": [
+                {"label": label, "done": done, "total": total}
+                for label, (done, total) in list(self._downloads.items())
+            ],
+        }
+
     def _on_state(self, event: StateChanged) -> None:
         if self.desktop is not None:
             self.desktop.set_busy(event.new != "idle")
@@ -179,6 +222,7 @@ class UiServer:
             "edition": EDITION,
             "version": __version__,
             "update": self.maintenance.release.version if self.maintenance.release else None,
+            "startup": self._startup_message(),
         }
 
     # -- app ------------------------------------------------------------------------------

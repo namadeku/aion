@@ -1,7 +1,16 @@
 // Live connection to the assistant: WebSocket events + a tiny reactive store.
 
 import { api, token } from "./api";
-import type { BusEvent, Edition, Emotion, HistoryEntry, Mood, Snapshot, State } from "./types";
+import type {
+  BusEvent,
+  Edition,
+  Emotion,
+  HistoryEntry,
+  Mood,
+  Snapshot,
+  StartupStatus,
+  State,
+} from "./types";
 
 type Listener = () => void;
 
@@ -26,6 +35,7 @@ class Store {
   version = "";
   /** Version of an available update, if any. */
   update: string | null = null;
+  startup: StartupStatus = { stage: "ready", error: null, voice_enabled: false, downloads: [] };
   /** Smoothed audio levels 0..1, updated ~30 times a second. */
   outputLevel = 0;
   inputLevel = 0;
@@ -106,6 +116,7 @@ class Store {
           update: s.update ?? null,
         });
         if (s.mood) this.mood = s.mood;
+        if (s.startup) this.startup = s.startup;
         this.openReply = null;
         this.loaded = true;
         break;
@@ -154,6 +165,10 @@ class Store {
         break;
       case "desktop_mode":
         this.desktop = Boolean(e.value);
+        break;
+      case "startup":
+        this.startup = e as unknown as StartupStatus;
+        this.voiceEnabled = this.startup.voice_enabled;
         break;
       case "update_available":
         this.update = String(e.version);

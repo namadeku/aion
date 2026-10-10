@@ -78,6 +78,8 @@ class VoiceOutput(SpeechOutput):
         self._synth_lock = asyncio.Lock()
         # engines that failed to load (e.g. Silero without torch): speak with Piper instead
         self._unavailable: set[str] = set()
+        #: The voice failed to start: replies are shown as text only (no download retries).
+        self.silent = False
 
     @property
     def voice(self) -> VoiceConfig:
@@ -100,9 +102,13 @@ class VoiceOutput(SpeechOutput):
         self.player.close()
 
     async def prepare(self, text: str) -> None:
+        if self.silent:
+            return
         self._ahead[text].append(asyncio.create_task(self._synthesize(text)))
 
     async def render(self, text: str) -> None:
+        if self.silent:
+            return
         queue = self._ahead.get(text)
         task = queue.popleft() if queue else asyncio.create_task(self._synthesize(text))
         if queue is not None and not queue:

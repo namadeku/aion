@@ -159,6 +159,22 @@ export interface Snapshot {
   version?: string;
   /** A newer release found by the background check. */
   update?: string | null;
+  startup?: StartupStatus;
+}
+
+export interface Download {
+  label: string;
+  done: number;
+  /** 0 when the server did not send the size. */
+  total: number;
+}
+
+/** Voice start-up: the first run downloads models while the window is already open. */
+export interface StartupStatus {
+  stage: "loading" | "ready" | "failed";
+  error: string | null;
+  voice_enabled: boolean;
+  downloads: Download[];
 }
 
 export type Edition = "dev" | "public";

@@ -1,3 +1,3 @@
-- Скачанный установщик обновления удаляется после установки и больше не занимает место (около 130 МБ) в папке данных.
-
-Скачайте `Aion-Setup-0.2.3.exe` ниже или обновитесь из программы: «О программе» → «Обновить и перезапустить».
+- feat(ui): open the window before voice models load, show download progress
+- fix(startup): report fatal errors without a console, survive a busy port
+- fix(stt): try Whisper on CUDA only when the CUDA libraries are present

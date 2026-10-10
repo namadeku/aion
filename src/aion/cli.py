@@ -7,6 +7,7 @@ import contextlib
 import io
 import os
 import sys
+import traceback
 from pathlib import Path
 from typing import Annotated
 
@@ -16,7 +17,7 @@ from rich.progress import TaskID
 
 from aion.config import ConfigStore, dump_yaml
 from aion.config.loader import find_config_path
-from aion.log import setup_logging
+from aion.log import report_fatal, setup_logging
 
 app = typer.Typer(help="Aion — голосовой ассистент.", no_args_is_help=True)
 config_app = typer.Typer(help="Работа с конфигом.", no_args_is_help=True)
@@ -125,6 +126,7 @@ def run(
         run_assistant(store, options, _ProgressBars(), console)
     except RuntimeError as e:
         console.print(f"[red]{e}[/]")
+        report_fatal(str(e))
         raise typer.Exit(1) from e
 
 
@@ -409,7 +411,8 @@ def plugin_disable(name: str, config: ConfigOption = None) -> None:
 
 
 def main() -> None:
-    # pythonw (desktop shortcut, autostart) has no console: send output nowhere
+    # pythonw (desktop shortcut, autostart) and the windowed exe have no console: send output
+    # nowhere (report_fatal shows a message box instead)
     if sys.stdout is None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
     if sys.stderr is None:
@@ -421,4 +424,8 @@ def main() -> None:
     # Windows console delivers Unicode regardless of this setting
     if isinstance(sys.stdin, io.TextIOWrapper) and not sys.stdin.isatty():
         sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-    app()
+    try:
+        app()
+    except Exception as e:
+        report_fatal(f"{type(e).__name__}: {e}", traceback.format_exc())
+        raise

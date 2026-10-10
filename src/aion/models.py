@@ -143,6 +143,8 @@ async def _fetch_into(url: str, part: Path, label: str, progress: Progress | Non
                 done += len(chunk)
                 if progress:
                     progress(label, done, total)
+    if progress:  # also ends downloads whose size the server did not send
+        progress(label, done, done)
 
 
 def _extract_single_dir(archive: Path, target: Path) -> None:

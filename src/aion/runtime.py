@@ -78,6 +78,7 @@ async def serve(  # noqa: PLR0915 - startup orchestration
     session.loop = asyncio.get_running_loop()
     session.loop.set_exception_handler(_quiet_connection_resets)
     session.stop = asyncio.Event()
+    progress = _startup_progress(progress, session)
 
     if options.voice:
         from aion.voice import voice_output_factory
@@ -110,25 +111,18 @@ async def serve(  # noqa: PLR0915 - startup orchestration
                 await server.start()
                 session.server = server
                 session.url = server.url
-            if options.voice:
-                from aion.tts.output import VoiceOutput
-                from aion.voice import create_pipeline
-
-                assert isinstance(aion.speech, VoiceOutput)
-                await aion.speech.warm_up()
-                pipeline = await create_pipeline(aion, progress)
-                aion.voice = pipeline
-                await pipeline.start()
-                if aion.config.ui.push_to_talk:
-                    hotkey = Hotkey(
-                        aion.config.ui.push_to_talk, session.loop, pipeline.push_to_talk
-                    )
-                    hotkey.start()
         except BaseException as e:
             session.error = e
             session.ready.set()
             raise
+        # the window opens now: the first start downloads voice models, the page shows progress
         session.ready.set()
+
+        if options.voice and await _start_voice(aion, server, progress):
+            assert aion.voice is not None
+            if aion.config.ui.push_to_talk:
+                hotkey = Hotkey(aion.config.ui.push_to_talk, session.loop, aion.voice.push_to_talk)
+                hotkey.start()
 
         if options.greet:
             await aion.dialog.say(greeting(aion.config), emotion="joy", wait=False)
@@ -167,6 +161,52 @@ def greeting(config: Config, now: datetime | None = None) -> str:
         f"{config.profile.name} к вашим услугам.",
     ]
     return f"{hello}, {address}. {random.choice(tails)}"
+
+
+async def _start_voice(aion: Aion, server: UiServer | None, progress: Progress) -> bool:
+    """Load the voice models (downloads them on the first run) and start listening.
+
+    With the UI a failure is shown on the page and Aion keeps working in text mode.
+    """
+    from aion.tts.output import VoiceOutput
+    from aion.voice import create_pipeline
+
+    if server is not None:
+        server.set_startup("loading")
+    try:
+        assert isinstance(aion.speech, VoiceOutput)
+        await aion.speech.warm_up()
+        pipeline = await create_pipeline(aion, progress)
+        try:
+            await pipeline.start()  # loads the STT model: the page shows voice controls after it
+        except Exception:
+            with contextlib.suppress(Exception):
+                await pipeline.stop()
+            raise
+        aion.voice = pipeline
+    except Exception as e:
+        if server is None:
+            raise
+        logger.exception("Голос не запустился, работаю в текстовом режиме")
+        if isinstance(aion.speech, VoiceOutput):
+            aion.speech.silent = True
+        server.set_startup("failed", f"{type(e).__name__}: {e}")
+        return False
+    if server is not None:
+        server.set_startup("ready")
+    return True
+
+
+def _startup_progress(console_progress: Progress | None, session: Session) -> Progress:
+    """Report model downloads to the console (if any) and to the page."""
+
+    def report(label: str, done: int, total: int) -> None:
+        if console_progress is not None:
+            console_progress(label, done, total)
+        if session.server is not None:
+            session.server.report_download(label, done, total)
+
+    return report
 
 
 def _quiet_connection_resets(loop: asyncio.AbstractEventLoop, context: dict[str, object]) -> None:

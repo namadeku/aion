@@ -340,3 +340,32 @@ async def test_missing_local_engine_falls_back_to_piper(app_store: ConfigStore) 
     audio = await out._synthesize("Привет")  # pyright: ignore[reportPrivateUsage]
     assert audio.samples.size == 100
     assert used == ["ru_RU-denis-medium"]
+
+
+@pytest.mark.parametrize(
+    ("device", "bundled", "installed", "expected"),
+    [
+        ("auto", False, False, ["cpu"]),  # installer build without CUDA: no GPU attempt
+        ("auto", False, True, ["cuda", "cpu"]),  # CUDA downloaded from the app
+        ("auto", True, False, ["cuda", "cpu"]),  # source install with --extra cuda
+        ("cuda", False, False, ["cuda"]),  # explicit choice is respected
+        ("cpu", True, True, ["cpu"]),
+    ],
+)
+def test_whisper_tries_cuda_only_with_its_libraries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    device: str,
+    bundled: bool,
+    installed: bool,
+    expected: list[str],
+) -> None:
+    from aion import cuda
+    from aion.stt.whisper_engine import WhisperEngine
+
+    monkeypatch.setattr(cuda, "bundled", lambda: bundled)
+    monkeypatch.setattr(cuda, "installed", lambda _d: installed)
+    monkeypatch.setattr(cuda, "has_nvidia_gpu", lambda: True)
+    monkeypatch.setattr(cuda, "add_dll_dirs", lambda _d: None)
+    engine = WhisperEngine(tmp_path, device=device, data_dir=tmp_path)  # pyright: ignore[reportArgumentType]
+    assert [d for d, _ in engine._candidates()] == expected  # pyright: ignore[reportPrivateUsage]

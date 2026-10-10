@@ -114,8 +114,69 @@ function startApp(): void {
     footer.replaceChildren(connection, ...(update ? [update] : []));
   }
 
+  const startup = h("div", { class: "startup", hidden: true });
+  app.append(startup);
+  let dismissedError: string | null = null;
+
+  /** First start: the voice models are downloading, or the voice failed to start. */
+  function renderStartup(): void {
+    const s = store.startup;
+    const failed = s.stage === "failed" && s.error !== dismissedError;
+    startup.hidden = s.stage !== "loading" && !failed;
+    if (startup.hidden) return;
+    startup.className = failed ? "startup failed" : "startup";
+    if (failed) {
+      const close = (): void => {
+        dismissedError = s.error;
+        renderStartup();
+      };
+      startup.replaceChildren(
+        h("button", { class: "startup-close", title: "Скрыть", onClick: close }, "×"),
+        h("b", null, "Голос не запустился"),
+        h("p", null, "Пока можно писать текстом. Причина:"),
+        h("code", null, s.error ?? ""),
+        h(
+          "p",
+          null,
+          "Проверьте интернет (модели скачиваются с huggingface.co и alphacephei.com) и микрофон, " +
+            "затем перезапустите Aion. Подробности — в %LOCALAPPDATA%\\Aion\\logs\\aion.log.",
+        ),
+      );
+      return;
+    }
+    startup.replaceChildren(
+      h("b", null, "Подготовка голоса"),
+      h(
+        "p",
+        null,
+        s.downloads.length
+          ? "Первый запуск: скачиваю модели, это займёт несколько минут."
+          : "Загружаю модели…",
+      ),
+      ...s.downloads.map((d) => {
+        const mb = (n: number): string => (n / 1e6).toFixed(0);
+        const size = d.total
+          ? `${mb(d.done)} / ${mb(d.total)} МБ`
+          : d.done
+            ? `${mb(d.done)} МБ`
+            : "";
+        const bar = h("div", { class: "startup-bar" }, h("span"));
+        const fill = bar.firstElementChild as HTMLElement;
+        fill.style.width = d.total ? `${Math.min(100, (100 * d.done) / d.total)}%` : "100%";
+        if (!d.total) fill.classList.add("indeterminate");
+        return h(
+          "div",
+          { class: "startup-file" },
+          h("div", null, h("span", null, d.label), h("small", null, size)),
+          bar,
+        );
+      }),
+    );
+  }
+
   window.addEventListener("hashchange", render);
   store.subscribe(renderFooter);
+  store.subscribe(renderStartup);
   // the first snapshot tells the edition: show or hide dev-only pages
   store.subscribe(() => {
     if (store.edition !== renderedEdition) render();
