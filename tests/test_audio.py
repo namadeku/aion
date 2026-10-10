@@ -369,3 +369,42 @@ def test_whisper_tries_cuda_only_with_its_libraries(
     monkeypatch.setattr(cuda, "add_dll_dirs", lambda _d: None)
     engine = WhisperEngine(tmp_path, device=device, data_dir=tmp_path)  # pyright: ignore[reportArgumentType]
     assert [d for d, _ in engine._candidates()] == expected  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_whisper_download_reports_bytes_of_all_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from aion import models
+
+    files = [("config.json", 10), ("vocabulary.txt", 20), ("model.bin", 100)]
+
+    async def fake_files(repo: str) -> list[tuple[str, int]]:
+        assert repo == "Systran/faster-whisper-small"
+        return files
+
+    async def fake_fetch(url: str, part: Path, label: str, progress: models.Progress) -> None:
+        size = dict(files)[url.rsplit("/", 1)[1]]
+        part.write_bytes(b"x" * size)
+        progress(label, size // 2, size)
+        progress(label, size, size)
+
+    monkeypatch.setattr(models, "whisper_files", fake_files)
+    monkeypatch.setattr(models, "_fetch_into", fake_fetch)
+    seen: list[tuple[int, int]] = []
+    path = await models.ensure_whisper("small", tmp_path, lambda _l, d, t: seen.append((d, t)))
+
+    assert path == tmp_path / "whisper" / "small"
+    assert sorted(p.name for p in path.iterdir()) == ["config.json", "model.bin", "vocabulary.txt"]
+    assert {t for _, t in seen} == {130}  # one row for the whole model
+    assert seen[-1] == (130, 130)
+    assert [d for d, _ in seen] == sorted(d for d, _ in seen)
+
+
+def test_whisper_finds_the_older_huggingface_cache(tmp_path: Path) -> None:
+    from aion import models
+
+    snapshot = tmp_path / "whisper" / "models--Systran--faster-whisper-small" / "snapshots" / "abc"
+    snapshot.mkdir(parents=True)
+    assert models.find_whisper(tmp_path, "small") is None
+    (snapshot / "model.bin").write_bytes(b"")
+    assert models.find_whisper(tmp_path, "small") == snapshot

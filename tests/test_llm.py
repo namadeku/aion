@@ -473,3 +473,52 @@ async def test_same_question_gets_a_different_answer(app: Aion, use_brain: Any) 
     second, third = provider.calls[1][0][-1].content, provider.calls[2][0][-1].content
     assert "Ты уже сказал: «Всё хорошо, а у тебя как?»" in second
     assert "Ты начинаешь повторяться" in third
+
+
+async def test_ollama_pulls_a_missing_model_with_progress() -> None:
+    import json
+
+    from aion.llm.ollama import OllamaProvider
+
+    pulled: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/version":
+            return httpx.Response(200, json={"version": "1"})
+        if request.url.path == "/api/generate":
+            return httpx.Response(200 if pulled else 404, json={})
+        assert request.url.path == "/api/pull"
+        pulled.append(True)
+        lines = [
+            {"status": "pulling manifest"},
+            {"status": "pulling a", "digest": "a", "total": 100, "completed": 50},
+            {"status": "pulling b", "digest": "b", "total": 20, "completed": 20},
+            {"status": "pulling a", "digest": "a", "total": 100, "completed": 100},
+            {"status": "success"},
+        ]
+        return httpx.Response(200, text="\n".join(json.dumps(x) for x in lines))
+
+    provider = OllamaProvider("http://127.0.0.1:11434", "qwen3:8b")
+    provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))  # pyright: ignore[reportPrivateUsage]
+    seen: list[tuple[str, int, int]] = []
+    provider.progress = lambda label, done, total: seen.append((label, done, total))
+    await provider.warm_up()
+
+    assert pulled == [True]
+    assert seen[0] == ("Языковая модель qwen3:8b", 50, 100)
+    assert seen[-1] == ("Языковая модель qwen3:8b", 120, 120)
+    assert all(done < total for _, done, total in seen[:-1])  # finished only at the end
+
+
+async def test_ollama_without_progress_does_not_pull() -> None:
+    from aion.llm.base import LlmError
+    from aion.llm.ollama import OllamaProvider
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path != "/api/pull"
+        return httpx.Response(200 if request.url.path == "/api/version" else 404, json={})
+
+    provider = OllamaProvider("http://127.0.0.1:11434", "qwen3:8b")
+    provider._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))  # pyright: ignore[reportPrivateUsage]
+    with pytest.raises(LlmError, match="ollama pull"):
+        await provider.warm_up()

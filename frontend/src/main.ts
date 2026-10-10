@@ -103,10 +103,11 @@ function startApp(): void {
   }
 
   function renderFooter(): void {
+    // before the first snapshot the page is still connecting, not disconnected
     const connection = h(
       "div",
-      { style: store.connected ? "" : "color:var(--amber)" },
-      store.connected ? "● соединение есть" : "○ нет соединения…",
+      { style: store.connected || !store.loaded ? "" : "color:var(--amber)" },
+      store.connected ? "● соединение есть" : store.loaded ? "○ нет соединения…" : "○ подключение…",
     );
     const update = store.update
       ? h("a", { href: "#/about", class: "update-link" }, `↑ обновление ${store.update}`)
@@ -118,11 +119,11 @@ function startApp(): void {
   app.append(startup);
   let dismissedError: string | null = null;
 
-  /** First start: the voice models are downloading, or the voice failed to start. */
+  /** First start: models are downloading (voice, language model), or the voice failed. */
   function renderStartup(): void {
     const s = store.startup;
     const failed = s.stage === "failed" && s.error !== dismissedError;
-    startup.hidden = s.stage !== "loading" && !failed;
+    startup.hidden = s.stage !== "loading" && !failed && !s.downloads.length;
     if (startup.hidden) return;
     startup.className = failed ? "startup failed" : "startup";
     if (failed) {
@@ -144,13 +145,15 @@ function startApp(): void {
       );
       return;
     }
+    const downloading = s.downloads.length > 0;
     startup.replaceChildren(
-      h("b", null, "Подготовка голоса"),
+      h("b", null, s.stage === "loading" ? "Подготовка голоса" : "Скачивание моделей"),
       h(
         "p",
         null,
-        s.downloads.length
-          ? "Первый запуск: скачиваю модели, это займёт несколько минут."
+        downloading
+          ? "Первый запуск: скачиваю модели, это займёт несколько минут. " +
+              "Пока можно писать текстом."
           : "Загружаю модели…",
       ),
       ...s.downloads.map((d) => {

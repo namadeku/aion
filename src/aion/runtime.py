@@ -21,6 +21,7 @@ from aion.core.events import AssistantReply, SpeechRecognized
 from aion.models import Progress
 
 if TYPE_CHECKING:
+    from aion.ui.desktop import Tray, Window
     from aion.ui.mascot import DesktopMascot
     from aion.ui.server import UiServer
 
@@ -87,6 +88,7 @@ async def serve(  # noqa: PLR0915 - startup orchestration
     else:
         speech = console_speech
     aion = Aion(store, speech=speech)
+    aion.progress = progress
     session.aion = aion
 
     if console is not None:
@@ -267,43 +269,82 @@ def run(
 
     thread = threading.Thread(target=core, name="aion-core", daemon=True)
     thread.start()
+
+    from aion.ui.desktop import Window, webview2_installed
+
+    window = Window(store.config.profile.name)
+    extras = _Extras()
+
+    def attach() -> None:
+        """Runs once the window is up: switch it to the interface when the core is ready."""
+        session.ready.wait()
+        if session.error is not None or session.url is None:
+            window.close()
+            return
+        window.navigate(session.url)
+        extras.mascot = mascot = _desktop_mascot(store, session, window)
+        if session.server is not None:  # an update closes the window too
+            session.server.maintenance.request_quit = lambda: _quit(session, window, mascot)
+        extras.tray = _tray(store, session, window, mascot)
+
+    try:
+        # without WebView2 pywebview falls back to Internet Explorer, which cannot show the UI
+        if not (webview2_installed() and window.run(attach)):
+            logger.warning("Окно недоступно (нет WebView2 или pywebview) — открываю браузер")
+            _raise_if_failed(session, thread)
+            assert session.url is not None
+            extras.tray = _tray(store, session, None, None)
+            webbrowser.open(session.url)
+            with contextlib.suppress(KeyboardInterrupt):
+                thread.join()
+    finally:
+        if extras.mascot is not None:
+            extras.mascot.close()
+        session.request_stop()
+        if extras.tray is not None:
+            extras.tray.stop()
+        thread.join(10)
+    _raise_if_failed(session, thread)
+
+
+@dataclass
+class _Extras:
+    """Desktop helpers created once the core is up."""
+
+    mascot: DesktopMascot | None = None
+    tray: Tray | None = None
+
+
+def _raise_if_failed(session: Session, thread: threading.Thread) -> None:
     session.ready.wait()
     if session.error is not None or session.url is None:
         thread.join(5)
         raise RuntimeError(f"Не удалось запустить: {session.error}")
 
-    from aion.ui.desktop import Tray, Window
 
-    name = store.config.profile.name
-    window = Window(name, session.url)
-    mascot = _desktop_mascot(store, session, window)
-    if session.server is not None:  # an update closes the window too
-        session.server.maintenance.request_quit = lambda: _quit(session, window, mascot)
-    tray = None
-    if store.config.ui.tray:
-        tray = Tray(
-            name,
-            on_open=window.show,
-            on_toggle_mute=session.toggle_mute,
-            is_muted=lambda: bool(session.aion and session.aion.voice and session.aion.voice.muted),
-            on_quit=lambda: _quit(session, window, mascot),
-            on_toggle_desktop=mascot.toggle if mascot else None,
-            is_desktop=lambda: bool(mascot and mascot.enabled),
-        )
-        tray.start()
-    try:
-        if not window.run():
-            logger.warning("pywebview недоступен — открываю интерфейс в браузере")
-            webbrowser.open(session.url)
-            with contextlib.suppress(KeyboardInterrupt):
-                thread.join()
-    finally:
-        if mascot is not None:
-            mascot.close()
-        session.request_stop()
-        if tray is not None:
-            tray.stop()
-        thread.join(10)
+def _tray(
+    store: ConfigStore, session: Session, window: Window | None, mascot: DesktopMascot | None
+) -> Tray | None:
+    if not store.config.ui.tray:
+        return None
+    from aion.ui.desktop import Tray
+
+    tray = Tray(
+        store.config.profile.name,
+        on_open=window.show if window is not None else lambda: _open_url(session),
+        on_toggle_mute=session.toggle_mute,
+        is_muted=lambda: bool(session.aion and session.aion.voice and session.aion.voice.muted),
+        on_quit=lambda: _quit(session, window, mascot),
+        on_toggle_desktop=mascot.toggle if mascot else None,
+        is_desktop=lambda: bool(mascot and mascot.enabled),
+    )
+    tray.start()
+    return tray
+
+
+def _open_url(session: Session) -> None:
+    if session.url:
+        webbrowser.open(session.url)
 
 
 def _desktop_mascot(store: ConfigStore, session: Session, window: object) -> DesktopMascot | None:

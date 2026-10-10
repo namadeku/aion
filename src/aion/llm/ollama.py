@@ -26,6 +26,7 @@ from aion.llm.base import (
     ToolDef,
     TurnEnd,
 )
+from aion.models import Progress
 
 KEEP_ALIVE = "30m"  # loading 8B weights into VRAM takes tens of seconds; keep them there
 
@@ -44,6 +45,7 @@ class OllamaProvider(LlmProvider):
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(10, read=300))
         self._server_lock = asyncio.Lock()
         self._started_server = False
+        self.progress: Progress | None = None  # set by the app: pull a missing model with progress
 
     async def _alive(self) -> bool:
         try:
@@ -70,8 +72,11 @@ class OllamaProvider(LlmProvider):
                 flags = 0
                 if sys.platform == "win32":
                     flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+                # cwd: the server outlives Aion and would otherwise lock the install folder,
+                # so the installer could not update or remove it
                 subprocess.Popen(
                     [str(exe), "serve"],
+                    cwd=exe.parent,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -86,9 +91,22 @@ class OllamaProvider(LlmProvider):
             raise LlmError("Сервер Ollama не запустился за 30 секунд")
 
     async def warm_up(self) -> None:
-        """Start the server if needed and load the model into memory ahead of the first question."""
+        """Start the server if needed and load the model into memory ahead of the first question.
+
+        In the app (``progress`` is set) a missing model is pulled first: the installer only
+        installs Ollama itself.
+        """
         await self.ensure_server()
-        r = await self._client.post(
+        r = await self._load_model()
+        if r.status_code == 404 and self.progress is not None:
+            await self.pull()
+            r = await self._load_model()
+        if r.status_code == 404:
+            raise LlmError(f"Модель {self.model} не найдена: выполните ollama pull {self.model}")
+        logger.info("Модель {} загружена в память", self.model)
+
+    async def _load_model(self) -> httpx.Response:
+        return await self._client.post(
             f"{self.base_url}/api/generate",
             json={
                 "model": self.model,
@@ -97,9 +115,37 @@ class OllamaProvider(LlmProvider):
             },
             timeout=httpx.Timeout(10, read=300),
         )
-        if r.status_code == 404:
-            raise LlmError(f"Модель {self.model} не найдена: выполните ollama pull {self.model}")
-        logger.info("Модель {} загружена в память", self.model)
+
+    async def pull(self) -> None:
+        """Download the model (``ollama pull``), reporting the bytes of all its layers."""
+        label = f"Языковая модель {self.model}"
+        layers: dict[str, tuple[int, int]] = {}
+        logger.info("Скачиваю модель Ollama {}", self.model)
+        async with self._client.stream(
+            "POST",
+            f"{self.base_url}/api/pull",
+            json={"model": self.model},
+            timeout=httpx.Timeout(10, read=600),
+        ) as response:
+            response.raise_for_status()
+            async for line in response.aiter_lines():
+                if not line.strip():
+                    continue
+                chunk = json.loads(line)
+                if error := chunk.get("error"):
+                    raise LlmError(f"Не удалось скачать модель {self.model}: {error}")
+                if (digest := chunk.get("digest")) and chunk.get("total"):
+                    layers[digest] = (int(chunk.get("completed", 0)), int(chunk["total"]))
+                    if self.progress:
+                        done = sum(d for d, _ in layers.values())
+                        total = sum(t for _, t in layers.values())
+                        self.progress(
+                            label, min(done, total - 1), total
+                        )  # not done until "success"
+        if self.progress:
+            total = max(1, sum(t for _, t in layers.values()))
+            self.progress(label, total, total)
+        logger.info("Модель {} скачана", self.model)
 
     def serves_same_model(self, other: LlmProvider | None) -> bool:
         """Whether ``other`` uses the very model this provider keeps loaded."""

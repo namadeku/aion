@@ -84,6 +84,82 @@ async def ensure(spec: ModelSpec, models_dir: Path, progress: Progress | None = 
     return models_dir
 
 
+HF_BASE = "https://huggingface.co"
+# what faster-whisper needs from a model repo (faster_whisper.utils.download_model)
+WHISPER_FILES = ("config.json", "preprocessor_config.json", "model.bin", "tokenizer.json")
+
+
+def whisper_repo(name: str) -> str:
+    """``small`` -> ``Systran/faster-whisper-small``; a repo id is returned as is."""
+    if "/" in name:
+        return name
+    from faster_whisper.utils import _MODELS  # pyright: ignore[reportPrivateUsage]
+
+    try:
+        return _MODELS[name]
+    except KeyError as e:
+        raise ValueError(f"Неизвестная модель Whisper: {name}") from e
+
+
+def whisper_dir(models_dir: Path, name: str) -> Path:
+    return models_dir / "whisper" / name.replace("/", "--")
+
+
+def find_whisper(models_dir: Path, name: str) -> Path | None:
+    """A complete local copy of the model: our own download or an older huggingface_hub cache."""
+    own = whisper_dir(models_dir, name)
+    if (own / "model.bin").exists():  # downloaded last, see ensure_whisper
+        return own
+    cache = models_dir / "whisper" / f"models--{whisper_repo(name).replace('/', '--')}"
+    for snapshot in sorted((cache / "snapshots").glob("*")):
+        if (snapshot / "model.bin").exists():
+            return snapshot
+    return None
+
+
+async def whisper_files(repo: str) -> list[tuple[str, int]]:
+    """Files of a faster-whisper repo as (name, size), ``model.bin`` last."""
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+        response = await client.get(f"{HF_BASE}/api/models/{repo}/tree/main")
+        response.raise_for_status()
+    files = [
+        (str(f["path"]), int(f.get("size", 0)))
+        for f in response.json()
+        if f.get("type") == "file"
+        and (f["path"] in WHISPER_FILES or str(f["path"]).startswith("vocabulary."))
+    ]
+    if not any(name == "model.bin" for name, _ in files):
+        raise RuntimeError(f"В {repo} нет model.bin")
+    return sorted(files, key=lambda f: f[0] == "model.bin")
+
+
+async def ensure_whisper(name: str, models_dir: Path, progress: Progress | None = None) -> Path:
+    """Download a faster-whisper model with byte progress; returns its directory.
+
+    huggingface_hub (what faster-whisper uses itself) reports no progress, so the biggest
+    download of the first start looked like a hang.
+    """
+    if found := find_whisper(models_dir, name):
+        return found
+    repo = whisper_repo(name)
+    files = await whisper_files(repo)
+    target = whisper_dir(models_dir, name)
+    label = f"Распознавание речи: Whisper {name}"
+    total = sum(size for _, size in files)
+    logger.info("Скачиваю Whisper {} ({}, {:.0f} МБ)", name, repo, total / 1e6)
+    finished = 0
+    for file, size in files:
+
+        def report(_label: str, done: int, _total: int, base: int = finished) -> None:
+            if progress:
+                progress(label, base + done, total)
+
+        url = f"{HF_BASE}/{repo}/resolve/main/{file}"
+        await _download(ModelFile(url, target / file), target / file, label, report)
+        finished += size
+    return target
+
+
 MAX_ATTEMPTS = 8
 
 

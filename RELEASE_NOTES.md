@@ -1,3 +1,3 @@
-- feat(ui): open the window before voice models load, show download progress
-- fix(startup): report fatal errors without a console, survive a busy port
-- fix(stt): try Whisper on CUDA only when the CUDA libraries are present
+- feat(installer): set up a fresh machine with visible progress
+- feat(startup): open the window at once, show every first-start download
+- feat(stt): download Whisper with byte progress

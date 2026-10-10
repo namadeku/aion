@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from aion.audio.pipeline import VoicePipeline
     from aion.llm.base import LlmProvider
     from aion.llm.brain import Brain
+    from aion.models import Progress
 
 SpeechFactory = Callable[[EventBus, StateMachine, Config], SpeechOutput]
 
@@ -58,6 +59,7 @@ class Aion:
         self.llm: LlmProvider | None = None
         self.brain: Brain | None = None
         self.voice: VoicePipeline | None = None  # set in voice mode
+        self.progress: Progress | None = None  # model downloads, shown by the UI
         self._watch_plugins = watch_plugins
         self._unsubscribe = store.subscribe(self._on_config_changed)
         self.dialog.interceptors.append(self.plugins.intercept)
@@ -134,6 +136,10 @@ class Aion:
             self.brain = None
             self.dialog.fallback = None
             return
+        from aion.llm.ollama import OllamaProvider
+
+        if isinstance(self.llm, OllamaProvider):
+            self.llm.progress = self.progress  # the first start pulls the model
         self.brain = Brain(self, self.llm)
         self.dialog.fallback = self.brain.respond
         logger.info("LLM: {} ({})", self.config.llm.provider, getattr(self.llm, "model", ""))

@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 from loguru import logger
 
-from aion import cuda
+from aion import cuda, models
 from aion.stt.base import Pcm, SttEngine, drop_hallucinations
 
 
@@ -34,36 +33,32 @@ class WhisperEngine(SttEngine):
 
     async def load(self) -> None:
         if self._model is None:
-            self._model = await asyncio.to_thread(self._load_blocking)
+            self._model = await self._load()
 
-    def _load_blocking(self) -> Any:
-        os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
-        from faster_whisper import WhisperModel
-
-        root = str(self.models_dir / "whisper")
+    async def _load(self) -> Any:
         last_error: Exception | None = None
         for device, compute in self._candidates():
             name = self.model_name
             if name == "auto":
                 name = "large-v3-turbo" if device == "cuda" else "small"
-            # faster-whisper downloads through huggingface_hub: no byte progress, just a busy row
-            label = f"Распознавание речи: Whisper {name}"
-            if self.progress:
-                self.progress(label, 0, 0)
             try:
-                model = WhisperModel(name, device=device, compute_type=compute, download_root=root)
-                # cuDNN/cuBLAS load lazily: run a tiny inference to be sure the device works.
-                list(model.transcribe(np.zeros(16000, dtype=np.float32), language=self.language)[0])
+                path = await models.ensure_whisper(name, self.models_dir, self.progress)
+                model = await asyncio.to_thread(self._open, path, device, compute)
                 self.active_device = device
                 logger.info("Whisper {} загружен на {} ({})", name, device, compute)
                 return model
-            except Exception as e:  # missing CUDA libs, OOM, ...
+            except Exception as e:  # no internet, missing CUDA libs, OOM, ...
                 last_error = e
                 logger.warning("Whisper на {} недоступен: {}", device, e)
-            finally:
-                if self.progress:
-                    self.progress(label, 1, 1)
         raise RuntimeError(f"Не удалось загрузить Whisper: {last_error}")
+
+    def _open(self, path: Path, device: str, compute: str) -> Any:
+        from faster_whisper import WhisperModel
+
+        model = WhisperModel(str(path), device=device, compute_type=compute)
+        # cuDNN/cuBLAS load lazily: run a tiny inference to be sure the device works.
+        list(model.transcribe(np.zeros(16000, dtype=np.float32), language=self.language)[0])
+        return model
 
     def _candidates(self) -> list[tuple[str, str]]:
         """Devices to try, in order, as (device, compute type).

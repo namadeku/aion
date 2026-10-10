@@ -2,8 +2,9 @@
 
 Runs ``scripts/build_exe.py`` (PyInstaller, CPU only — CUDA is downloaded from the app) and
 compiles ``installer/aion.iss`` with Inno Setup into ``dist/Aion-Setup-<version>.exe`` plus a
-``.sha256`` file. The version always comes from ``aion.__version__``: the updater compares it
-with the release tag, so they must match.
+``.sha256`` file. The installer downloads the default voice models while it installs; their
+list comes from :mod:`aion.models` (``build/models_*.iss``). The version always comes from
+``aion.__version__``: the updater compares it with the release tag, so they must match.
 
 Options:
   --skip-exe   reuse an existing dist/Aion (only recompile the installer)
@@ -13,6 +14,7 @@ Options:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import io
 import os
@@ -23,6 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
+BUILD = ROOT / "build"
 
 
 def find_iscc(explicit: str | None) -> Path:
@@ -46,6 +49,54 @@ def find_iscc(explicit: str | None) -> Path:
             if candidate.exists():
                 return candidate
     sys.exit("Не найден Inno Setup (ISCC.exe): https://jrsoftware.org/isdl.php")
+
+
+def default_models() -> list[tuple[str, str]]:
+    """(url, path relative to the models dir) of what the default config needs on first start.
+
+    ``model.bin`` of Whisper comes last: its presence marks a complete model (aion.models).
+    """
+    from aion import models
+    from aion.config.schema import Config
+
+    config = Config()
+    files = [
+        *models.silero_vad().files,
+        *models.piper_voice(config.profile.voice.voice).files,
+    ]
+    result = [(f.url, f.dest.as_posix()) for f in files]
+    name = "small" if config.stt.whisper_model == "auto" else config.stt.whisper_model
+    repo = models.whisper_repo(name)
+    target = models.whisper_dir(Path(), name).as_posix()
+    for file, _ in asyncio.run(models.whisper_files(repo)):
+        result.append((f"{models.HF_BASE}/{repo}/resolve/main/{file}", f"{target}/{file}"))
+    return result
+
+
+def write_model_includes(files: list[tuple[str, str]]) -> None:
+    """Inno Setup snippets: the downloads (Pascal) and the copies into the models dir ([Files])."""
+    code = [
+        "procedure AddModelDownloads(Page: TDownloadWizardPage; ModelsDir: String);",
+        "begin",
+    ]
+    entries = []
+    for i, (url, dest) in enumerate(files, 1):
+        temp = f"aion-model-{i}"
+        path = dest.replace("/", "\\")
+        folder, _, name = path.rpartition("\\")
+        code += [
+            f"  if not FileExists(ModelsDir + '\\{path}') then",
+            f"    Page.Add('{url}', '{temp}', '');",
+        ]
+        dest_dir = "{#ModelsDir}" + (f"\\{folder}" if folder else "")
+        entries.append(
+            f'Source: "{{tmp}}\\{temp}";DestDir: "{dest_dir}"; DestName: "{name}"; '
+            "Flags: external skipifsourcedoesntexist ignoreversion uninsneveruninstall"
+        )
+    code.append("end;")
+    BUILD.mkdir(exist_ok=True)
+    (BUILD / "models_code.iss").write_text("\n".join(code) + "\n", "utf-8-sig")
+    (BUILD / "models_files.iss").write_text("\n".join(entries) + "\n", "utf-8-sig")
 
 
 def sha256(path: Path) -> str:
@@ -76,7 +127,9 @@ def main() -> None:
     if not (DIST / "Aion" / "Aion.exe").exists():
         sys.exit("Нет dist/Aion/Aion.exe — запустите без --skip-exe")
 
-    print(f"Inno Setup: Aion {__version__} ({EDITION})…")
+    files = default_models()
+    write_model_includes(files)
+    print(f"Inno Setup: Aion {__version__} ({EDITION}), моделей в установщике: {len(files)}…")
     subprocess.run(
         [
             str(iscc),
@@ -85,6 +138,7 @@ def main() -> None:
             f"/DSourceDir={DIST / 'Aion'}",
             f"/DIconFile={ROOT / 'build' / 'aion.ico'}",
             f"/DOutputDir={DIST}",
+            f"/DModelIncludes={BUILD}",
             str(ROOT / "installer" / "aion.iss"),
         ],
         check=True,

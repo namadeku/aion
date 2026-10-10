@@ -209,23 +209,63 @@ class Tray:
             self._icon.stop()
 
 
-class Window:
-    """pywebview window; must run on the main thread (blocks until closed)."""
+def webview2_installed() -> bool:
+    """Whether the Edge WebView2 runtime is present (pywebview's own check, per-user or machine).
 
-    def __init__(self, title: str, url: str) -> None:
+    Without it pywebview falls back to Internet Explorer, which cannot show the interface.
+    """
+    if sys.platform != "win32":
+        return True
+    import winreg
+
+    client = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    for root, path in (
+        (winreg.HKEY_CURRENT_USER, rf"SOFTWARE\{client}"),
+        (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\WOW6432Node\{client}"),
+        (winreg.HKEY_LOCAL_MACHINE, rf"SOFTWARE\{client}"),
+    ):
+        try:
+            with winreg.OpenKey(root, path) as key:
+                version = str(winreg.QueryValueEx(key, "pv")[0])
+        except OSError:
+            continue
+        if version and version != "0.0.0.0":
+            return True
+    return False
+
+
+# shown while the core starts: on a fresh machine loading the plugins and the UI server takes
+# a while, and an empty screen looks like the app did not start
+LOADING_HTML = """<!doctype html><html><head><meta charset="utf-8"><style>
+html,body{margin:0;height:100%;background:#04070C;color:#9fdcf2;font:15px "Segoe UI",sans-serif}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px}
+.ring{width:72px;height:72px;border-radius:50%;border:3px solid #123;
+border-top-color:#54d6ff;animation:spin 1s linear infinite}
+h1{margin:0;font-weight:300;letter-spacing:.5em;color:#54d6ff}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style></head><body><h1>AION</h1><div class="ring"></div><div>Запуск…</div></body></html>"""
+
+
+class Window:
+    """pywebview window; must run on the main thread (blocks until closed).
+
+    It opens with :data:`LOADING_HTML`; :meth:`navigate` switches it to the interface.
+    """
+
+    def __init__(self, title: str) -> None:
         self.title = title
-        self.url = url
         self._window: Any = None
         self.closed = threading.Event()
 
-    def run(self) -> bool:
+    def run(self, on_start: Callable[[], None] | None = None) -> bool:
+        """Show the window; ``on_start`` runs in a background thread once it is up."""
         try:
             import webview
         except ImportError:
             return False
         self._window = webview.create_window(
             self.title,
-            self.url,
+            html=LOADING_HTML,
             width=1280,
             height=800,
             min_size=(760, 560),
@@ -233,8 +273,12 @@ class Window:
         )
         self._window.events.closed += self.closed.set
         os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", WEBVIEW2_ARGS)
-        webview.start()
+        webview.start(on_start)
         return True
+
+    def navigate(self, url: str) -> None:
+        if self._window is not None:
+            self._window.load_url(url)
 
     def show(self) -> None:
         if self._window is not None:

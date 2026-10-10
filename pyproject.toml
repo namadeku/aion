@@ -1,6 +1,6 @@
 [project]
 name = "aion"
-version = "0.2.5"
+version = "0.2.6"
 description = "Offline-first desktop voice assistant in the spirit of J.A.R.V.I.S. with a plugin system"
 readme = "README.md"
 license = "MIT"
