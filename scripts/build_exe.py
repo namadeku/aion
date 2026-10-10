@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import ast
 import importlib.util
+import io
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,8 @@ def main() -> None:
     parser.add_argument("--cuda", action="store_true", help="bundle CUDA libraries for Whisper")
     parser.add_argument("--console", action="store_true", help="show a console window")
     args = parser.parse_args()
+    if isinstance(sys.stdout, io.TextIOWrapper):  # CI consoles are often cp1252
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     if not (SRC / "ui" / "static" / "index.html").exists():
         sys.exit("Интерфейс не собран: cd frontend && pnpm install && pnpm build")

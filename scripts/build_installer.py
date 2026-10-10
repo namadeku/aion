@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import os
 import shutil
 import subprocess
@@ -62,6 +63,8 @@ def main() -> None:
     parser.add_argument("--skip-exe", action="store_true", help="reuse dist/Aion")
     parser.add_argument("--iscc", help="path to ISCC.exe")
     args = parser.parse_args()
+    if isinstance(sys.stdout, io.TextIOWrapper):  # CI consoles are often cp1252
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     sys.path.insert(0, str(ROOT / "src"))
     from aion import __version__

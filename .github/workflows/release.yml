@@ -13,6 +13,8 @@ jobs:
   installer:
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v4
 
