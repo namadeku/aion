@@ -37,6 +37,10 @@ PACKAGE_ROOT = "aion_plugins"
 
 Status = Literal["loaded", "disabled", "error", "unloaded"]
 
+#: With ``defer_slow``: how long startup waits for plugins before going on without the
+#: slow ones (they finish in the background and register their commands then).
+LOAD_GRACE_S = 0.5
+
 
 @dataclass(eq=False)
 class PluginRecord:
@@ -110,6 +114,10 @@ class PluginManager:
         self.host = host
         self.records: dict[str, PluginRecord] = {}
         self._lock = asyncio.Lock()
+        #: Startup does not wait for plugins that need longer than LOAD_GRACE_S.
+        self.defer_slow = False
+        self.load_grace = LOAD_GRACE_S
+        self._deferred: dict[str, asyncio.Task[None]] = {}
         self._watch_task: asyncio.Task[None] | None = None
         self._stop_watch = asyncio.Event()
 
@@ -146,19 +154,55 @@ class PluginManager:
         self.host.config.paths.plugins.mkdir(parents=True, exist_ok=True)
         async with self._lock:
             self.records = discover(plugin_dirs(self.host.config))
+            to_load: list[PluginRecord] = []
             for record in self.records.values():
                 if record.status == "error":
                     await self._publish(record)
                 elif not self.is_enabled(record.name):
                     record.status = "disabled"
                 else:
-                    await self._load(record)
+                    to_load.append(record)
+            # Plugins are independent and some wait on I/O in on_load (the app scan of "apps"
+            # takes over a second): load them side by side so the slowest one sets the pace.
+            tasks = {r.name: asyncio.ensure_future(self._load(r)) for r in to_load}
+            if self.defer_slow and tasks:
+                _, pending = await asyncio.wait(tasks.values(), timeout=self.load_grace)
+            else:
+                await asyncio.gather(*tasks.values())
+                pending = set()
+            for name, task in tasks.items():
+                if task in pending:
+                    self._deferred[name] = task
+                    task.add_done_callback(lambda t, n=name: self._deferred_done(n, t))
             self._refresh()
         names = ", ".join(r.name for r in self.loaded())
         logger.info("Плагины загружены ({}): {}", len(self.loaded()), names)
+        if self._deferred:
+            logger.info("Ещё загружаются: {}", ", ".join(self._deferred))
+
+    async def wait_loaded(self) -> None:
+        """Wait for plugins whose loading was deferred (see ``defer_slow``)."""
+        if self._deferred:
+            await asyncio.gather(*self._deferred.values(), return_exceptions=True)
+
+    def _deferred_done(self, name: str, task: asyncio.Task[None]) -> None:
+        if self._deferred.get(name) is task:
+            del self._deferred[name]
+            if not task.cancelled():
+                self._refresh()  # its commands become available now
+                logger.info("Плагин {} загружен", name)
+
+    async def _cancel_deferred(self, name: str | None = None) -> None:
+        """Stop the still-loading plugin ``name`` (all of them without a name)."""
+        names = [name] if name is not None else list(self._deferred)
+        tasks = [t for n in names if (t := self._deferred.pop(n, None)) is not None]
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def shutdown(self) -> None:
         await self.stop_watching()
+        await self._cancel_deferred()
         async with self._lock:
             for record in self.loaded():
                 await self._call_hook(record, "on_shutdown")
@@ -166,6 +210,7 @@ class PluginManager:
             self._refresh()
 
     async def reload(self, name: str) -> PluginRecord | None:
+        await self._cancel_deferred(name)
         async with self._lock:
             old = self.records.get(name)
             if old is None:
@@ -197,6 +242,7 @@ class PluginManager:
         disabled = sorted({*cfg.disabled, name})
         enabled = [n for n in cfg.enabled if n != name]
         self.host.store.update({"plugins": {"disabled": disabled, "enabled": enabled}})
+        await self._cancel_deferred(name)
         async with self._lock:
             record = self.records.get(name)
             if record:
@@ -286,6 +332,7 @@ class PluginManager:
         record = next((r for r in self.records.values() if r.path == plugin_dir), None)
         if record is not None and not (plugin_dir / MANIFEST_FILE).exists():
             logger.info("Плагин {} удалён", record.name)
+            await self._cancel_deferred(record.name)
             async with self._lock:
                 await self._unload(record)
                 self.records.pop(record.name, None)
@@ -329,6 +376,12 @@ class PluginManager:
                 len(record.commands),
                 len(record.tools),
             )
+        except asyncio.CancelledError:
+            if record.instance is not None:
+                await record.instance._cancel_tasks()  # pyright: ignore[reportPrivateUsage]
+            record.instance, record.commands, record.tools = None, [], []
+            _purge_modules(record.name)
+            raise
         except Exception as e:
             logger.opt(exception=e).error("Не удалось загрузить плагин {}", record.name)
             if record.instance is not None:
@@ -393,6 +446,8 @@ def _import_plugin(path: Path, manifest: PluginManifest) -> types.ModuleType:
     sys.modules[package_name] = package
 
     entry = path / manifest.entry
+    if not entry.resolve().is_relative_to(path.resolve()):
+        raise ImportError(f"Точка входа {manifest.entry} вне папки плагина")
     module_name = f"{package_name}.{entry.stem}"
     spec = importlib.util.spec_from_file_location(module_name, entry)
     if spec is None or spec.loader is None:

@@ -1,0 +1,7 @@
+name: Игровая панель
+triggers:
+  - (открой|покажи) игровую панель
+  - open game bar
+lang: both
+actions:
+  - {type: keys, combo: "win+g"}

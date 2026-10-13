@@ -78,14 +78,28 @@ async def test_download_verifies_checksum(tmp_path: Path, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(updater, "download_file", fake_download)
     good = updater.Release(
-        "0.3.0", "", "", "u", "Aion-Setup-0.3.0.exe", 1, hashlib.sha256(payload).hexdigest()
+        "0.3.0",
+        "",
+        "",
+        "https://github.com/namadeku/aion/releases/download/v0.3.0/Aion-Setup-0.3.0.exe",
+        "Aion-Setup-0.3.0.exe",
+        1,
+        hashlib.sha256(payload).hexdigest(),
     )
     (tmp_path / "Aion-Setup-0.2.0.exe").write_bytes(b"old")
     path = await updater.download(good, tmp_path)
     assert path.read_bytes() == payload
     assert not (tmp_path / "Aion-Setup-0.2.0.exe").exists()
 
-    bad = updater.Release("0.4.0", "", "", "u", "Aion-Setup-0.4.0.exe", 1, "00" * 32)
+    bad = updater.Release(
+        "0.4.0",
+        "",
+        "",
+        "https://github.com/namadeku/aion/releases/download/v0.4.0/Aion-Setup-0.4.0.exe",
+        "Aion-Setup-0.4.0.exe",
+        1,
+        "00" * 32,
+    )
     with pytest.raises(ValueError, match="Контрольная сумма"):
         await updater.download(bad, tmp_path)
     assert not (tmp_path / "Aion-Setup-0.4.0.exe").exists()

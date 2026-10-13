@@ -36,6 +36,8 @@ export interface Avatar {
   update(input: AvatarInput): void;
   /** One-off reaction, e.g. perking up when the assistant hears its name. */
   react?(event: Reaction): void;
+  /** Plays any named action or its mapped clip (settings preview; see avatar/actions.ts). */
+  play?(action: string): void;
   /** Desktop mascot body mode (desktop mode only). */
   setDesktop?(input: DesktopInput | null): void;
   /** Character position in the frame (desktop mode only). */

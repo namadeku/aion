@@ -2,12 +2,32 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from aion.config import Config
     from aion.models import Progress
     from aion.stt.base import SttEngine
+    from aion.stt.whisper_engine import WhisperOptions
+
+
+def tuning(section: object, name: str, default: Any) -> Any:
+    """An optional config field: the schema may not define it (yet), then ``default`` is used."""
+    return getattr(section, name, default)
+
+
+def whisper_options(config: Config) -> WhisperOptions:
+    from aion.stt.whisper_engine import WhisperOptions
+
+    stt = config.stt
+    base = WhisperOptions()
+    return WhisperOptions(
+        beam_size=int(tuning(stt, "beam_size", base.beam_size)),
+        compute_type=str(tuning(stt, "compute_type", base.compute_type)),
+        cpu_threads=int(tuning(stt, "cpu_threads", base.cpu_threads)),
+        bias=tuning(stt, "bias", base.bias),
+        silence_dbfs=float(tuning(stt, "silence_dbfs", base.silence_dbfs)),
+    )
 
 
 def create_stt(config: Config, progress: Progress | None = None) -> SttEngine:
@@ -26,4 +46,5 @@ def create_stt(config: Config, progress: Progress | None = None) -> SttEngine:
         model=stt.whisper_model,
         device=stt.device,
         data_dir=config.paths.data_dir,
+        options=whisper_options(config),
     )

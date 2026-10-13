@@ -59,7 +59,10 @@ class Weather(Plugin):
 
     async def _get(self, url: str, params: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, params=params)
+            try:
+                response = await client.get(url, params=params)
+            except httpx.TransportError:  # the first request after start sometimes drops
+                response = await client.get(url, params=params)
             response.raise_for_status()
             return response.json()
 
@@ -96,7 +99,7 @@ class Weather(Plugin):
                 return f"Не получилось найти город {city}."
             data = await self.forecast(place)
         except httpx.HTTPError as e:
-            self.log.warning("Open-Meteo недоступен: {}", e)
+            self.log.warning("Open-Meteo недоступен: {!r}", e)
             return "Сервис погоды сейчас недоступен."
         return format_report(place.name, data, day)
 

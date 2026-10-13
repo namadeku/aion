@@ -1,0 +1,7 @@
+name: Перемотать назад
+triggers:
+  - перемотай назад
+  - rewind
+lang: both
+actions:
+  - {type: keys, combo: "left"}

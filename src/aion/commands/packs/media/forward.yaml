@@ -1,0 +1,7 @@
+name: Перемотать вперёд
+triggers:
+  - перемотай вперед
+  - fast forward
+lang: both
+actions:
+  - {type: keys, combo: "right"}

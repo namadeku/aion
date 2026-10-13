@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
+import uuid
 from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any
 
@@ -28,6 +29,9 @@ from aion.core.events import (
     EmotionChanged,
     IntentMatched,
     Notification,
+    RunFinished,
+    RunStarted,
+    RunStatus,
     Source,
     SpeechRecognized,
 )
@@ -38,6 +42,7 @@ from aion.text import normalize
 
 Interceptor = Callable[["Turn"], Awaitable[bool]]
 Fallback = Callable[["Turn"], Awaitable[None]]
+TurnHandler = Callable[["Turn"], Awaitable[None]]
 
 _YES = {"да", "конечно", "подтверждаю", "давай", "выполняй", "ага", "угу", "точно", "yes", "yep"}
 _NO = {"нет", "не", "отмена", "отмени", "стоп", "no", "cancel"}
@@ -72,13 +77,34 @@ def parse_yes_no(text: str) -> bool | None:
     return None
 
 
-class Turn:
-    """One request/response exchange. Plugins see it through their ``ctx``."""
+def new_run_id() -> str:
+    return uuid.uuid4().hex[:12]
 
-    def __init__(self, dialog: DialogManager, text: str, source: Source) -> None:
+
+class Turn:
+    """One request/response exchange. Plugins see it through their ``ctx``.
+
+    ``named`` — a voice phrase was addressed by the assistant's name (it opened the phrase or
+    was said right before it); always True for typed text. ``run_id`` ties the work-log
+    events of this turn together (empty for unprompted remarks, which are not shown there).
+    A handler sets ``failed`` to report the run as an error without raising.
+    """
+
+    def __init__(
+        self,
+        dialog: DialogManager,
+        text: str,
+        source: Source,
+        *,
+        named: bool | None = None,
+        run_id: str | None = None,
+    ) -> None:
         self.dialog = dialog
         self.text = text
-        self.source = source
+        self.source: Source = source
+        self.named = named if named is not None else source != "voice"
+        self.run_id = new_run_id() if run_id is None else run_id
+        self.failed = False
 
     async def say(self, text: str, *, emotion: str | None = None, wait: bool = True) -> None:
         await self.dialog.say(text, emotion=emotion, wait=wait)
@@ -111,6 +137,9 @@ class DialogManager:
         self.last_reply: str = ""
         self._turn: asyncio.Task[Any] | None = None
         self._answer: asyncio.Future[str] | None = None
+        # interrupt() awaits: without the lock two quick phrases both pass the busy check
+        # and the first turn task would be overwritten while still running
+        self._submit_lock = asyncio.Lock()
 
     # -- public API ---------------------------------------------------------------------
 
@@ -143,7 +172,7 @@ class DialogManager:
         It is an ordinary turn for barge-in: a user's phrase interrupts it. Returns what
         ``run`` returned (whether something was said) or None if it was interrupted.
         """
-        turn = Turn(self, text, "plugin")
+        turn = Turn(self, text, "plugin", run_id="")
         task = asyncio.create_task(run(turn), name="dialog-proactive")
         self._turn = task
         try:
@@ -160,8 +189,13 @@ class DialogManager:
             self.follow_up_until = time.monotonic() + self.config.config.assistant.follow_up_seconds
         return said
 
-    async def submit(self, text: str, source: Source = "text") -> None:
-        """Feed a user utterance. Returns immediately; the turn runs in the background."""
+    async def submit(
+        self, text: str, source: Source = "text", *, named: bool | None = None
+    ) -> None:
+        """Feed a user utterance. Returns immediately; the turn runs in the background.
+
+        ``named`` tells whether a voice phrase was addressed by name (see :class:`Turn`).
+        """
         text = text.strip()
         if not text:
             return
@@ -169,9 +203,26 @@ class DialogManager:
             await self.bus.publish(SpeechRecognized(text=text, source=source))
             self._answer.set_result(text)
             return
-        if self.busy or self.speech.busy:
-            await self.interrupt("text" if source != "voice" else "speech")
-        self._turn = asyncio.create_task(self._run_turn(text, source), name="dialog-turn")
+        async with self._submit_lock:
+            if self.busy or self.speech.busy:
+                await self.interrupt("text" if source != "voice" else "speech")
+            turn = Turn(self, text, source, named=named)
+            self._turn = asyncio.create_task(self._run_turn(turn), name="dialog-turn")
+
+    async def start(self, title: str, handler: TurnHandler, source: Source = "ui") -> Turn:
+        """Run ``handler`` as a turn without a user phrase (a command started from the UI).
+
+        It behaves like any turn: it interrupts the running one, a new phrase or the stop
+        button cancels it, and its work-log run is announced. Returns at once.
+        """
+        turn = Turn(self, title, source, named=True)
+        async with self._submit_lock:
+            if self.busy or self.speech.busy:
+                await self.interrupt("text")
+            self._turn = asyncio.create_task(
+                self._run_turn(turn, handler), name="dialog-command-run"
+            )
+        return turn
 
     async def wait(self) -> None:
         """Wait for the current turn (if any) to finish."""
@@ -265,18 +316,30 @@ class DialogManager:
         address = self.config.config.assistant.user_address
         return f"{address.capitalize()}, подтвердите: {what}?"
 
-    async def _run_turn(self, text: str, source: Source) -> None:
-        with self.state.active("thinking"):
-            await self.bus.publish(SpeechRecognized(text=text, source=source))
-            turn = Turn(self, text, source)
-            try:
-                await self._dispatch(turn)
-                await self.speech.flush()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Ошибка обработки фразы {!r}", text)
-                await self.say("Простите, при выполнении команды произошла ошибка.")
+    async def _run_turn(self, turn: Turn, handler: TurnHandler | None = None) -> None:
+        text, source = turn.text, turn.source
+        status: RunStatus = "done"
+        await self.bus.publish(RunStarted(run_id=turn.run_id, title=text, source=source))
+        try:
+            with self.state.active("thinking"):
+                if handler is None:
+                    await self.bus.publish(SpeechRecognized(text=text, source=source))
+                try:
+                    await (handler or self._dispatch)(turn)
+                    await self.speech.flush()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    status = "error"
+                    logger.exception("Ошибка обработки фразы {!r}", text)
+                    await self.say("Простите, при выполнении команды произошла ошибка.")
+        except asyncio.CancelledError:
+            # a fire-and-forget publish: this task is being cancelled and must not wait
+            self.bus.emit(RunFinished(run_id=turn.run_id, status="interrupted"))
+            raise
+        if turn.failed:
+            status = "error"
+        await self.bus.publish(RunFinished(run_id=turn.run_id, status=status))
         if source == "voice":
             self.follow_up_until = time.monotonic() + self.config.config.assistant.follow_up_seconds
 

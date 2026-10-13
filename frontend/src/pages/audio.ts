@@ -95,6 +95,15 @@ export function audioPage(root: HTMLElement): () => void {
           "div",
           { class: "grid" },
           field(
+            "Только кнопка или горячая клавиша",
+            toggle(
+              cfg.wakeword.backend === "none",
+              (v) => void save({ wakeword: { backend: v ? "none" : "stt" } }),
+            ),
+            "Имя не слушается совсем: ассистент реагирует только на «Нажми и говори». Тише и экономнее.",
+            true,
+          ),
+          field(
             "Способ",
             select(
               [
@@ -106,6 +115,11 @@ export function audioPage(root: HTMLElement): () => void {
               cfg.wakeword.backend,
               (v) => void save({ wakeword: { backend: v } }),
             ),
+          ),
+          field(
+            "Имя в конце фразы",
+            toggle(cfg.wakeword.tail_name, (v) => void save({ wakeword: { tail_name: v } }, false)),
+            "Принимать имя и после команды: «который час, Аион» (только для известных команд)",
           ),
           field(
             "Чувствительность",
@@ -169,9 +183,10 @@ export function audioPage(root: HTMLElement): () => void {
               0.1,
               0.9,
               0.05,
-              (v) => void save({ audio: { vad: { threshold: v } } }),
+              (v) => void save({ audio: { vad: { threshold: v } } }, false),
               (v) => v.toFixed(2),
             ),
+            "Выше — меньше ложных срабатываний на шум. Применяется сразу",
           ),
           field(
             "Пауза конца фразы",
@@ -180,10 +195,51 @@ export function audioPage(root: HTMLElement): () => void {
               200,
               1500,
               50,
-              (v) => void save({ audio: { vad: { min_silence_ms: v } } }),
+              (v) => void save({ audio: { vad: { min_silence_ms: v } } }, false),
               (v) => `${v} мс`,
             ),
-            "Меньше — быстрее ответ, но может перебить вас на паузе",
+            "Меньше — быстрее ответ, но может перебить вас на паузе. Применяется сразу",
+          ),
+        ),
+      ),
+      panel(
+        "Звук",
+        h(
+          "div",
+          { class: "grid" },
+          field(
+            "Выравнивать тихую речь",
+            toggle(cfg.audio.normalize, (v) => void save({ audio: { normalize: v } })),
+            "Поднимает уровень тихих фраз (до +30 дБ) перед распознаванием",
+          ),
+          field(
+            "Шумоподавление",
+            toggle(cfg.audio.denoise, (v) => void save({ audio: { denoise: v } })),
+            "Спектральный гейт: помогает на ровном шуме (вентилятор, гул)",
+          ),
+          field(
+            "Ранний старт распознавания",
+            range(
+              cfg.audio.speculative_ms,
+              0,
+              400,
+              50,
+              (v) => void save({ audio: { speculative_ms: v } }),
+              (v) => (v ? `${v} мс` : "выкл."),
+            ),
+            "Начать распознавать после такой паузы, не ждать конца фразы. Ответ быстрее почти на 40%",
+          ),
+          field(
+            "Эхо после своей речи",
+            range(
+              cfg.audio.echo_holdoff_s,
+              0,
+              3,
+              0.1,
+              (v) => void save({ audio: { echo_holdoff_s: v } }),
+              (v) => `${v.toFixed(1)} с`,
+            ),
+            "Сколько секунд после голоса ассистента услышанное считается эхом. Без наушников держите 0,6 с и больше",
           ),
         ),
       ),
@@ -230,6 +286,45 @@ export function audioPage(root: HTMLElement): () => void {
               cfg.stt.device,
               (v) => void save({ stt: { device: v } }),
             ),
+          ),
+          field(
+            "Точность вычислений",
+            select(
+              [
+                ["auto", "авто"],
+                ["int8", "int8 (быстро на CPU)"],
+                ["int8_float16", "int8_float16"],
+                ["float16", "float16 (GPU)"],
+                ["float32", "float32 (точнее, медленнее)"],
+              ],
+              cfg.stt.compute_type,
+              (v) => void save({ stt: { compute_type: v } }),
+            ),
+            "Для обычной работы оставьте «авто»",
+          ),
+          field(
+            "Ширина поиска (beam)",
+            range(
+              cfg.stt.beam_size,
+              0,
+              10,
+              1,
+              (v) => void save({ stt: { beam_size: v } }),
+              (v) => (v ? String(v) : "авто"),
+            ),
+            "Авто: 5 на GPU и 1 на CPU. Больше — точнее, но дольше",
+          ),
+          field(
+            "Потоки процессора",
+            range(
+              cfg.stt.cpu_threads,
+              0,
+              16,
+              1,
+              (v) => void save({ stt: { cpu_threads: v } }),
+              (v) => (v ? String(v) : "авто"),
+            ),
+            "Сколько потоков отдать Whisper на CPU",
           ),
         ),
       ),

@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from rapidfuzz import fuzz
-
 from aion.audio.vad import Frame
-from aion.text import normalize
+from aion.wakeword.names import match_name
 
 
 class WakeWordDetector(ABC):
@@ -28,45 +26,27 @@ def sensitivity_to_threshold(sensitivity: float) -> float:
     return 95.0 - 30.0 * max(0.0, min(1.0, sensitivity))
 
 
-def _squash(text: str) -> str:
-    """Rough phonetic folding so "айон", "аион" and "a ион" compare as close."""
-    text = normalize(text, numbers=False).replace(" ", "")
-    for a, b in (("й", "и"), ("ё", "е"), ("ъ", ""), ("ь", ""), ("дж", "ж"), ("з", "с")):
-        text = text.replace(a, b)
-    return text
+TAIL_THRESHOLD = 90.0  # a name after the command ("который час, Аион") must be near-exact
 
 
-def find_name(text: str, names: list[str], threshold: float = 80.0) -> tuple[str, int] | None:
-    """Find an assistant name among the first words of ``text``.
+def find_name(
+    text: str, names: list[str], threshold: float = 80.0, *, tail: bool = False
+) -> tuple[str, int] | None:
+    """Find an assistant name opening ``text`` (see :mod:`aion.wakeword.names`).
 
     Returns ``(name, words_consumed)``: the name may be split by the recognizer into several
-    words ("а ион"), so windows of 1..3 words are compared to every name variant.
+    words ("а ион"), and filler words before it ("слушай, Аион") count as consumed.
+    With ``tail=True`` a (near-exact) name closing the phrase is accepted as well.
     """
-    words = normalize(text, numbers=False).split()
-    targets = [(n, _squash(n)) for n in names if n.strip()]
-    best: tuple[float, str, int] | None = None
-    for start in range(min(len(words), 4)):
-        for size in (1, 2, 3):
-            window = words[start : start + size]
-            if len(window) < size:
-                break
-            candidate = _squash("".join(window))
-            for name, squashed in targets:
-                if abs(len(candidate) - len(squashed)) > max(2, len(squashed) // 2):
-                    continue
-                score = fuzz.ratio(candidate, squashed)
-                if score >= threshold and (best is None or score > best[0]):
-                    best = (score, name, start + size)
-        if best is not None:
-            break
-    return (best[1], best[2]) if best else None
+    found = match_name(text, names, threshold, tail_threshold=TAIL_THRESHOLD if tail else None)
+    return (found.name, found.end) if found else None
 
 
-def strip_name(text: str, names: list[str], threshold: float = 80.0) -> str:
-    """Remove a (fuzzily matched) leading assistant name: "Айон, который час" -> "который час"."""
-    found = find_name(text, names, threshold)
+def strip_name(text: str, names: list[str], threshold: float = 80.0, *, tail: bool = False) -> str:
+    """Remove a (fuzzily matched) assistant name: "Айон, который час" -> "который час"."""
+    found = match_name(text, names, threshold, tail_threshold=TAIL_THRESHOLD if tail else None)
     if found is None:
         return text.strip()
-    _, consumed = found
-    original = text.split()
-    return " ".join(original[consumed:]).lstrip(" ,.!?:;-—")
+    if found.where == "tail":
+        return text[: found.char_start].rstrip(" ,.!?:;-—")
+    return text[found.char_end :].lstrip(" ,.!?:;-—")

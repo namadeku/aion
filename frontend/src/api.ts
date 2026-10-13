@@ -34,30 +34,38 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Validation messages of a 422 answer (`{"error": [...]}`), one per problem. */
+    public details: string[] = [],
   ) {
     super(message);
   }
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const form = body instanceof FormData;
   const res = await fetch(path, {
     method,
     headers: {
       "X-Aion-Token": token,
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      // a FormData body sets its own multipart boundary
+      ...(body !== undefined && !form ? { "Content-Type": "application/json" } : {}),
     },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : form ? body : JSON.stringify(body),
   });
   if (!res.ok) {
     let message = `${res.status} ${res.statusText}`;
+    let details: string[] = [];
     try {
       const data = await res.json();
       if (typeof data.detail === "string") message = data.detail;
-      else if (Array.isArray(data.error)) message = data.error.join("; ");
+      else if (Array.isArray(data.error)) {
+        details = data.error.map(String);
+        message = details.join("; ");
+      }
     } catch {
       /* not JSON */
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, details);
   }
   const type = res.headers.get("content-type") ?? "";
   if (type.includes("application/json")) return (await res.json()) as T;
@@ -68,6 +76,8 @@ export const api = {
   get: <T>(path: string) => request<T>("GET", path),
   post: <T>(path: string, body?: unknown) => request<T>("POST", path, body ?? {}),
   put: <T>(path: string, body: unknown) => request<T>("PUT", path, body),
+  /** POST a multipart form (file upload). */
+  upload: <T>(path: string, form: FormData) => request<T>("POST", path, form),
   patch: <T>(path: string, body: unknown) => request<T>("PATCH", path, body),
   del: <T>(path: string) => request<T>("DELETE", path),
 };

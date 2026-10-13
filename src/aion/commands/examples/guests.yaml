@@ -1,0 +1,15 @@
+# Example scenario. Put your own site into "target" (or any program, folder or file).
+name: Протокол гостей
+triggers:
+  - протокол гостей
+  - (гости пришли|к нам гости)
+lang: ru
+enabled: true
+confirm: auto
+description: Свернуть все окна, сделать звук тише и открыть сайт для гостей
+actions:
+  - {type: minimize_all}
+  - {type: volume, set: 20}
+  - {type: wait, seconds: 0.5}
+  - {type: open, target: "https://music.yandex.ru"}
+  - {type: say, text: "Готово, можно встречать гостей."}

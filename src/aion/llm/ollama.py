@@ -45,6 +45,7 @@ class OllamaProvider(LlmProvider):
         self._client = httpx.AsyncClient(timeout=httpx.Timeout(10, read=300))
         self._server_lock = asyncio.Lock()
         self._started_server = False
+        self._ready = False  # the server answered recently: skip the version probe per request
         self.progress: Progress | None = None  # set by the app: pull a missing model with progress
 
     async def _alive(self) -> bool:
@@ -59,33 +60,25 @@ class OllamaProvider(LlmProvider):
 
         This way the Ollama desktop app does not have to run: Aion owns the server.
         """
+        if self._ready:
+            return
         async with self._server_lock:
             if await self._alive():
+                self._ready = True
                 return
             if not self._is_local():
                 raise LlmError(f"Ollama недоступна по адресу {self.base_url}")
-            exe = find_ollama()
+            # PATH lookup and process creation touch the disk: keep them off the event loop
+            exe = await asyncio.to_thread(find_ollama)
             if exe is None:
                 raise LlmError("Ollama не установлена: https://ollama.com")
             if not self._started_server:
                 logger.info("Запускаю сервер Ollama в фоне: {}", exe)
-                flags = 0
-                if sys.platform == "win32":
-                    flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
-                # cwd: the server outlives Aion and would otherwise lock the install folder,
-                # so the installer could not update or remove it
-                subprocess.Popen(
-                    [str(exe), "serve"],
-                    cwd=exe.parent,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    creationflags=flags,
-                    close_fds=True,
-                )
+                await asyncio.to_thread(_spawn_server, exe)
                 self._started_server = True
             for _ in range(60):  # GPU discovery takes ~10-15 s on the first start
                 if await self._alive():
+                    self._ready = True
                     return
                 await asyncio.sleep(0.5)
             raise LlmError("Сервер Ollama не запустился за 30 секунд")
@@ -232,40 +225,74 @@ class OllamaProvider(LlmProvider):
         text: list[str] = []
         calls: list[ToolCall] = []
         stop = ""
-        try:
-            async with self._client.stream("POST", f"{self.base_url}/api/chat", json=body) as r:
-                if r.status_code == 404:
-                    raise LlmError(
-                        f"Модель {self.model} не найдена: выполните ollama pull {self.model}"
-                    )
-                if r.status_code >= 400:
-                    detail = (await r.aread()).decode(errors="replace")[:300]
-                    raise LlmError(f"Ollama ответила {r.status_code}: {detail}")
-                async for line in r.aiter_lines():
-                    if not line.strip():
-                        continue
-                    chunk = json.loads(line)
-                    if error := chunk.get("error"):
-                        raise LlmError(f"Ollama: {error}")
-                    msg = chunk.get("message") or {}
-                    if delta := msg.get("content"):
-                        text.append(delta)
-                        yield TextDelta(delta)
-                    for call in msg.get("tool_calls") or []:
-                        fn = call.get("function", {})
-                        args = fn.get("arguments") or {}
-                        if isinstance(args, str):
-                            args = json.loads(args or "{}")
-                        calls.append(ToolCall(uuid.uuid4().hex[:12], fn.get("name", ""), args))
-                    if chunk.get("done"):
-                        stop = chunk.get("done_reason", "stop")
-        except httpx.ConnectError as e:
-            raise LlmError(
-                "Ollama не запущена (ollama serve) или недоступна по адресу " + self.base_url
-            ) from e
-        except httpx.HTTPError as e:
-            raise LlmError(f"Ошибка связи с Ollama: {e}") from e
+        for attempt in (1, 2):
+            try:
+                async with self._client.stream("POST", f"{self.base_url}/api/chat", json=body) as r:
+                    if r.status_code == 404:
+                        raise LlmError(
+                            f"Модель {self.model} не найдена: выполните ollama pull {self.model}"
+                        )
+                    if r.status_code >= 400:
+                        detail = (await r.aread()).decode(errors="replace")[:300]
+                        raise LlmError(f"Ollama ответила {r.status_code}: {detail}")
+                    async for line in r.aiter_lines():
+                        if not line.strip():
+                            continue
+                        delta, done_reason = _read_chunk(json.loads(line), calls)
+                        if delta:
+                            text.append(delta)
+                            yield TextDelta(delta)
+                        stop = done_reason or stop
+                break
+            except httpx.ConnectError as e:
+                self._ready = False
+                if attempt == 1 and not text:
+                    # the server died after the last request: start it again once
+                    await self.ensure_server()
+                    continue
+                raise LlmError(
+                    "Ollama не запущена (ollama serve) или недоступна по адресу " + self.base_url
+                ) from e
+            except httpx.TimeoutException as e:
+                raise LlmError("Ollama слишком долго не отвечает — модель ещё загружается?") from e
+            except httpx.HTTPError as e:
+                raise LlmError(f"Ошибка связи с Ollama: {e}") from e
+            except ValueError as e:  # json.JSONDecodeError: a half-written line, a proxy page
+                raise LlmError("Ollama прислала непонятный ответ. Перезапустите её.") from e
         yield TurnEnd(Message("assistant", "".join(text), tool_calls=calls), stop)
+
+
+def _read_chunk(chunk: dict[str, Any], calls: list[ToolCall]) -> tuple[str, str]:
+    """One streamed line -> (text delta, finish reason); tool calls are appended to ``calls``."""
+    if error := chunk.get("error"):
+        raise LlmError(f"Ollama: {error}")
+    msg = chunk.get("message") or {}
+    for call in msg.get("tool_calls") or []:
+        fn = call.get("function", {})
+        args = fn.get("arguments") or {}
+        if isinstance(args, str):
+            args = json.loads(args or "{}")
+        calls.append(ToolCall(uuid.uuid4().hex[:12], fn.get("name", ""), args))
+    done_reason = chunk.get("done_reason", "stop") if chunk.get("done") else ""
+    return msg.get("content") or "", done_reason
+
+
+def _spawn_server(exe: Path) -> None:
+    """Start ``ollama serve`` detached and windowless."""
+    flags = 0
+    if sys.platform == "win32":
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    # cwd: the server outlives Aion and would otherwise lock the install folder,
+    # so the installer could not update or remove it
+    subprocess.Popen(
+        [str(exe), "serve"],
+        cwd=exe.parent,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=flags,
+        close_fds=True,
+    )
 
 
 def find_ollama() -> Path | None:

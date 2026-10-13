@@ -1,0 +1,109 @@
+# Character voice presets: an existing voice + rate + pitch + effect under our own name.
+#
+# Only voices whose licence allows use in an MIT-licensed application are offered as free
+# presets. Licences were read from the voices' MODEL_CARD files (rhasspy/piper-voices):
+#   ru_RU-denis-medium  CC0           allowed
+#   ru_RU-dmitri-medium CC0           allowed
+#   ru_RU-ruslan-medium CC BY-NC-SA   NOT used (non-commercial, share-alike)
+#   ru_RU-irina-medium  Unknown       NOT used (no licence stated)
+# Silero v4 is CC BY-NC-SA 4.0 (non-commercial): presets on it carry `non_commercial: true`.
+# Edge TTS is an online Microsoft service: presets on it carry `online: true`.
+# Names are our own; no third-party characters, trademarks or voice samples.
+#
+# Fields: id, title, description, engine, voice, rate, pitch, effect (none|metallic|radio),
+# license (of the voice), non_commercial (default false), online (default false).
+
+presets:
+  - id: butler
+    title: Дворецкий
+    description: Неторопливый, сдержанный и вежливый голос.
+    engine: piper
+    voice: ru_RU-dmitri-medium
+    rate: 0.92
+    pitch: -1.5
+    effect: none
+    license: CC0
+
+  - id: pilot
+    title: Пилот
+    description: Бодрая речь с лёгким шумом радиосвязи.
+    engine: piper
+    voice: ru_RU-denis-medium
+    rate: 1.08
+    pitch: -1.0
+    effect: radio
+    license: CC0
+
+  - id: robot
+    title: Робот
+    description: Ровный низкий голос с металлическим оттенком.
+    engine: piper
+    voice: ru_RU-denis-medium
+    rate: 0.95
+    pitch: -2.5
+    effect: metallic
+    license: CC0
+
+  - id: narrator
+    title: Рассказчик
+    description: Низкий размеренный голос для длинных ответов.
+    engine: piper
+    voice: ru_RU-dmitri-medium
+    rate: 0.85
+    pitch: -3.0
+    effect: none
+    license: CC0
+
+  - id: dispatcher
+    title: Диспетчер
+    description: Чёткая быстрая речь по рации.
+    engine: piper
+    voice: ru_RU-denis-medium
+    rate: 1.2
+    pitch: 0.0
+    effect: radio
+    license: CC0
+
+  - id: announcer
+    title: Диктор
+    description: Естественный женский голос Edge (нужен интернет).
+    engine: edge
+    voice: ru-RU-SvetlanaNeural
+    rate: 1.0
+    pitch: 0.0
+    effect: none
+    license: Microsoft online service
+    online: true
+
+  - id: concierge
+    title: Консьерж
+    description: Мужской голос Edge, чуть медленнее обычного (нужен интернет).
+    engine: edge
+    voice: ru-RU-DmitryNeural
+    rate: 0.95
+    pitch: -1.0
+    effect: none
+    license: Microsoft online service
+    online: true
+
+  - id: captain
+    title: Капитан
+    description: Выразительный голос Silero, только для некоммерческого использования.
+    engine: silero
+    voice: aidar
+    rate: 1.0
+    pitch: -1.0
+    effect: none
+    license: CC BY-NC-SA 4.0
+    non_commercial: true
+
+  - id: storyteller
+    title: Сказительница
+    description: Мягкий женский голос Silero, только для некоммерческого использования.
+    engine: silero
+    voice: baya
+    rate: 0.92
+    pitch: 0.0
+    effect: none
+    license: CC BY-NC-SA 4.0
+    non_commercial: true

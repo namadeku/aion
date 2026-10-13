@@ -1,0 +1,7 @@
+name: История буфера обмена
+triggers:
+  - история буфера обмена
+  - clipboard history
+lang: both
+actions:
+  - {type: keys, combo: "win+v"}

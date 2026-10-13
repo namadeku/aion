@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 SESSION_GAP_S = 30 * 60  # a pause this long ends a conversation (as in ShortTermMemory)
 CHECK_S = 60.0
+MAX_LINES = 400  # lines kept of one conversation (the summary reads only the tail anyway)
 MIN_USER_LINES = 2  # shorter exchanges ("который час?") are not worth a diary entry
 TRANSCRIPT_CHARS = 8000  # the summarizer sees at most this much of the conversation
 FOLLOW_UP_DAYS = 7  # a question is stale this many days after its date
@@ -212,12 +213,14 @@ class Diary:
 
     def _on_user(self, event: SpeechRecognized) -> None:
         self.lines.append((event.ts, "user", event.text))
+        del self.lines[:-MAX_LINES]  # a conversation that never pauses must not grow forever
 
     def _on_reply(self, event: AssistantReply) -> None:
         if event.text:
             self._reply.append(event.text)
         if event.final and self._reply:
             self.lines.append((event.ts, "assistant", " ".join(self._reply)))
+            del self.lines[:-MAX_LINES]
             self._reply = []
 
     async def _run(self) -> None:

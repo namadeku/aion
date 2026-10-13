@@ -198,6 +198,9 @@ def resolve(
             return Target(kind, name, location)
     if sys.platform == "win32" and name in WINDOWS_APPS:
         return Target("app", name, WINDOWS_APPS[name])
+    # "notepad" means the system Notepad, not the closest fuzzy match ("Programmer's Notepad")
+    if sys.platform == "win32" and name in WINDOWS_APPS.values() and not name.endswith(":"):
+        return Target("app", name, name)
     # as spoken, as people call it in English ("телега" -> telegram), and transliterated
     queries = {name, SPOKEN_APPS.get(name, name), translit(name)}
     if apps and (hit := _best(queries, list(apps))):

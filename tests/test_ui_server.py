@@ -116,6 +116,53 @@ def test_avatar_files_are_confined(client: Any, tmp_path: Path) -> None:
     assert tc.get(f"/avatar/{TOKEN}/..%2Fsecret.txt").status_code == 404
 
 
+def test_avatar_animations_are_listed(tmp_path: Path) -> None:
+    from aion.ui.server import avatar_animations
+
+    (tmp_path / "me.vrm").write_bytes(b"glTF")
+    (tmp_path / "wave.vrma").write_bytes(b"glTF")
+    (tmp_path / "idle.vrma").write_bytes(b"glTF")
+    (tmp_path / "notes.txt").write_text("-")
+    assert avatar_animations(tmp_path / "me.vrm") == ["idle.vrma", "wave.vrma"]
+    assert avatar_animations(None) == []
+    assert avatar_animations(tmp_path / "missing" / "me.vrm") == []
+
+
+def test_avatar_clips_and_mapping(client: Any, tmp_path: Path) -> None:
+    tc, aion = client
+    (tmp_path / "me.vrm").write_bytes(b"glTF")
+    (tmp_path / "hello.vrma").write_bytes(b"glTF")
+    avatar = {"kind": "vrm", "path": str(tmp_path / "me.vrm")}
+    aion.store.update({"profiles": {"aion": {"avatar": avatar}}})
+    assert tc.get("/api/avatar/clips").json() == {"clips": ["hello.vrma"]}
+
+    patch = {"animations": {"wave": "hello.vrma", "stretch": "procedural"}}
+    r = tc.patch("/api/config", json={"profiles": {"aion": {"avatar": patch}}})
+    assert r.status_code == 200
+    snapshot = aion_snapshot(tc)
+    assert snapshot["avatar"]["animations"] == {"wave": "hello.vrma", "stretch": "procedural"}
+    assert snapshot["avatar"]["clips"] == ["hello.vrma"]
+
+    def mapping(animations: dict[str, str]) -> Any:
+        return tc.patch(
+            "/api/config", json={"profiles": {"aion": {"avatar": {"animations": animations}}}}
+        )
+
+    # an empty value drops the entry (patches are deep-merged)
+    r = mapping({"wave": ""})
+    assert r.json()["profiles"]["aion"]["avatar"]["animations"] == {"stretch": "procedural"}
+
+    bad = ["../secret.vrma", "C:\\x\\a.vrma", "sub/a.vrma", "a.vrm", ".hidden.vrma", "a.vrma\n"]
+    for file in bad:
+        assert mapping({"wave": file}).status_code == 422, file
+    assert mapping({"../x": "a.vrma"}).status_code == 422
+
+
+def aion_snapshot(tc: TestClient) -> dict[str, Any]:
+    with tc.websocket_connect(f"/ws?token={TOKEN}") as ws:
+        return ws.receive_json()
+
+
 def test_secrets_are_never_returned(
     client: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

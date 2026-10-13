@@ -1,0 +1,7 @@
+name: Spotify тише
+triggers:
+  - (сделай|сделать) спотифай тише
+  - spotify quieter
+lang: both
+actions:
+  - {type: volume, app: spotify, change: -15}

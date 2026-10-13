@@ -5,6 +5,7 @@
 
 import { avatarUrl } from "../api";
 import type { Emotion } from "../types";
+import { follow, voiceOpenness } from "./smooth";
 import type { Avatar, AvatarInput, AvatarOptions, DesktopInput, Layout, Reaction } from "./types";
 
 type Pixi = typeof import("pixi.js");
@@ -32,6 +33,8 @@ export class Live2DAvatar implements Avatar {
   private nextGlance = 2;
   private nod = 0;
   private bounce = 0;
+  private listenLean = 0;
+  private reduced = matchMedia("(prefers-reduced-motion: reduce)");
   private desktop: DesktopInput | null = null;
 
   private constructor(
@@ -83,7 +86,7 @@ export class Live2DAvatar implements Avatar {
     this.model.y = this.fullBody ? height - this.model.height : height * 0.05;
   }
 
-  update({ state, emotion, outputLevel, time, dt }: AvatarInput): void {
+  update({ state, emotion, outputLevel, inputLevel, time, dt }: AvatarInput): void {
     const core = this.model.internalModel.coreModel as unknown as {
       setParameterValueById(id: string, value: number): void;
     };
@@ -94,9 +97,12 @@ export class Live2DAvatar implements Avatar {
         /* the model has no such parameter */
       }
     };
-    const k = (speed: number) => Math.min(1, dt * speed);
-    const target = state === "speaking" ? Math.min(1, outputLevel * 1.8) : 0;
-    this.mouth += (target - this.mouth) * k(20);
+    const k = (speed: number) => follow(speed, dt);
+    // the desktop mascot is small on screen: speech gestures get a boost there
+    const boost = this.fullBody && !this.reduced.matches ? 1.6 : 1;
+    const open = voiceOpenness(outputLevel);
+    const target = state === "speaking" ? Math.min(1, open * Math.min(boost, 1.15)) : 0;
+    this.mouth += (target - this.mouth) * k(target > this.mouth ? 30 : 14);
     set("ParamMouthOpenY", this.mouth);
     set("ParamMouthForm", emotion === "joy" ? 1 : emotion === "sad" ? -0.6 : 0.2);
 
@@ -124,7 +130,10 @@ export class Live2DAvatar implements Avatar {
     this.bounce = Math.max(0, this.bounce - dt * 1.5);
     const tilt = state === "thinking" ? 10 : state === "listening" ? -7 : 0;
     set("ParamAngleX", this.look.x * 18 + Math.sin(time * 0.37) * 4);
-    set("ParamAngleY", this.look.y * 12 - this.nod * 14 + Math.sin(time * 0.9) * 2);
+    const heard = state === "listening" ? inputLevel : 0;
+    this.listenLean += (heard - this.listenLean) * k(heard > this.listenLean ? 8 : 3);
+    const lean = boost > 1 ? this.listenLean * 8 : 0;
+    set("ParamAngleY", this.look.y * 12 - this.nod * 14 * boost - lean + Math.sin(time * 0.9) * 2);
     set("ParamAngleZ", tilt + Math.sin(time * 0.7) * 3 + Math.sin(time * 2.1) * 3 * speaking);
     set("ParamBodyAngleX", Math.sin(time * 0.45) * 4 + (this.desktop?.facing ?? 0) * 8);
     set("ParamBodyAngleZ", Math.sin(time * 0.6) * 2 + this.bounce * Math.sin(time * 14) * 6);

@@ -58,7 +58,10 @@ class EventBus:
 
     def emit_threadsafe(self, event: Event, loop: asyncio.AbstractEventLoop) -> None:
         """Publish from a non-asyncio thread (audio callbacks, tray, hotkeys)."""
-        loop.call_soon_threadsafe(self.emit, event)
+        try:
+            loop.call_soon_threadsafe(self.emit, event)
+        except RuntimeError:  # the loop is closed: a late audio/tray callback during shutdown
+            logger.debug("Событие {} отброшено: цикл событий уже закрыт", event.type)
 
     @staticmethod
     async def _call(handler: Handler[Any], event: Event) -> None:

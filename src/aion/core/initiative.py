@@ -35,6 +35,8 @@ if TYPE_CHECKING:
 URGENT = 0.9  # importance from which a remark skips the gap since the previous one
 GATHER_S = 0.8  # how long to collect a burst of observations before speaking
 POLL_S = 0.2  # how often to check whether the dialog became free
+MAX_PENDING = 50  # observations waiting for a quiet moment
+MAX_COOLDOWNS = 500  # remembered cooldown keys before expired ones are pruned
 
 
 @dataclass
@@ -103,7 +105,13 @@ class Initiative:
         if now < self._cooldowns.get(key, float("-inf")):
             return False
         if obs.cooldown:
+            if len(self._cooldowns) >= MAX_COOLDOWNS:  # keys built from free text pile up
+                self._cooldowns = {k: t for k, t in self._cooldowns.items() if t > now}
+                while len(self._cooldowns) >= MAX_COOLDOWNS:  # all still running: drop the oldest
+                    del self._cooldowns[next(iter(self._cooldowns))]
             self._cooldowns[key] = now + obs.cooldown
+        if len(self._pending) >= MAX_PENDING:  # the dialog stayed busy: the oldest is stale
+            self._pending.pop(0)
         self._pending.append(obs)
         self._wake.set()
         return True

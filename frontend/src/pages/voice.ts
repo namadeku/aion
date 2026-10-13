@@ -1,6 +1,8 @@
 import { api } from "../api";
-import { field, h, range, select, text, toast } from "../dom";
-import type { Config, Profile, VoiceInfo } from "../types";
+import { field, h, range, select, text, toast, toggle } from "../dom";
+import type { Config, Profile, VoiceInfo, VoicePreset } from "../types";
+import { getClassicHud, setClassicHud } from "../prefs";
+import { AnimationPreview, animationsPanel } from "./animations";
 import { failure, loadConfig, pageShell, panel, patchConfig } from "./common";
 
 const ENGINES: [string, string][] = [
@@ -16,16 +18,128 @@ const EFFECTS: [string, string][] = [
 ];
 const AVATARS: [string, string][] = [
   ["hud", "Голографический круг (HUD)"],
+  ["orb", "Орб — каркасная сфера"],
   ["vrm", "3D-модель VRM"],
   ["live2d", "Live2D (.model3.json)"],
 ];
 
-export function voicePage(root: HTMLElement): void {
+const PRESET_SAMPLE = "Добрый вечер. Все системы работают в штатном режиме.";
+
+/** «Готовые голоса»: apply a preset with PATCH /api/config, listen with /api/voice/preview. */
+function presetsPanel(onApplied: (cfg: Config) => void): HTMLElement {
+  const box = h("div", { class: "preset-grid" }, h("p", { class: "muted" }, "Загрузка…"));
+  const player = new Audio();
+  let playing: HTMLButtonElement | null = null;
+
+  async function listen(p: VoicePreset, btn: HTMLButtonElement): Promise<void> {
+    player.pause();
+    playing?.removeAttribute("aria-busy");
+    playing = btn;
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Синтез…";
+    btn.setAttribute("aria-busy", "true");
+    try {
+      const blob = await api.post<Blob>("/api/voice/preview", {
+        text: PRESET_SAMPLE,
+        engine: p.engine,
+        voice: p.voice,
+        rate: p.rate,
+        pitch: p.pitch,
+        effect: p.effect,
+      });
+      player.src = URL.createObjectURL(blob);
+      await player.play();
+    } catch (err) {
+      toast("Не получилось", err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+      btn.removeAttribute("aria-busy");
+    }
+  }
+
+  async function apply(p: VoicePreset): Promise<void> {
+    const next = await patchConfig(p.patch);
+    if (next) onApplied(next);
+  }
+
+  function card(p: VoicePreset): HTMLElement {
+    const listenBtn = h("button", { type: "button", class: "btn ghost small" }, "Прослушать");
+    listenBtn.addEventListener("click", () => void listen(p, listenBtn));
+    return h(
+      "article",
+      { class: `preset-card${p.current ? " current" : ""}`, "data-preset": p.id },
+      h(
+        "div",
+        { class: "preset-head" },
+        h("h3", null, p.title),
+        p.current ? h("span", { class: "tag ok" }, "выбран") : null,
+      ),
+      h("p", { class: "muted" }, p.description),
+      h(
+        "div",
+        { class: "row tags" },
+        h("span", { class: "tag" }, p.engine),
+        p.effect !== "none" ? h("span", { class: "tag" }, p.effect) : null,
+        p.non_commercial
+          ? h(
+              "span",
+              { class: "tag warn", title: `Лицензия голоса: ${p.license || "некоммерческая"}` },
+              "только некоммерческое",
+            )
+          : null,
+        p.online ? h("span", { class: "tag warn" }, "нужен интернет") : null,
+        p.installed === false ? h("span", { class: "tag" }, "скачается") : null,
+      ),
+      h(
+        "div",
+        { class: "row" },
+        h(
+          "button",
+          {
+            type: "button",
+            class: "btn small",
+            disabled: p.current,
+            "aria-label": `Выбрать голос «${p.title}»`,
+            onclick: () => void apply(p),
+          },
+          p.current ? "Выбран" : "Выбрать",
+        ),
+        listenBtn,
+      ),
+    );
+  }
+
+  void api.get<VoicePreset[]>("/api/voice/presets").then(
+    (presets) => {
+      box.replaceChildren(
+        ...(presets.length
+          ? presets.map(card)
+          : [h("p", { class: "muted" }, "Готовых голосов нет.")]),
+      );
+    },
+    () => box.replaceChildren(h("p", { class: "muted" }, "Готовые голоса недоступны.")),
+  );
+  return panel(
+    "Готовые голоса",
+    h(
+      "p",
+      { class: "muted hint" },
+      "Голос, скорость, высота и эффект одним нажатием. Ниже всё можно подстроить вручную.",
+    ),
+    box,
+  );
+}
+
+export function voicePage(root: HTMLElement): () => void {
   const body = pageShell(
     root,
     "Голос и персонаж",
     "Имя, голос, внешность и характер. Профилей может быть несколько — переключайтесь между ними.",
   );
+  // the preview keeps its model across re-renders (every saved setting re-renders the page)
+  const preview = new AnimationPreview();
   void loadConfig().then(render, (err) => failure(body, err));
 
   function render(cfg: Config): void {
@@ -320,6 +434,11 @@ export function voicePage(root: HTMLElement): void {
           ),
           "Применяется при следующем выходе на рабочий стол",
         ),
+        field(
+          "Орб в окне вместо HUD",
+          toggle(!getClassicHud(), (v) => setClassicHud(!v)),
+          "Для профиля без модели (HUD) панель справа показывает орб. Хранится в этом окне",
+        ),
       ),
       h(
         "p",
@@ -330,6 +449,22 @@ export function voicePage(root: HTMLElement): void {
       ),
     );
 
-    body.replaceChildren(profiles, identity, voice, character, avatar);
+    const animations = animationsPanel(
+      profile.avatar,
+      preview,
+      (slot, file) => void patchProfile({ avatar: { animations: { [slot]: file } } }),
+    );
+
+    body.replaceChildren(
+      profiles,
+      identity,
+      presetsPanel(render),
+      voice,
+      character,
+      avatar,
+      animations,
+    );
   }
+
+  return () => preview.dispose();
 }

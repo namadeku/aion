@@ -8,8 +8,21 @@
 
 import * as THREE from "three";
 import type { VRM, VRMHumanBoneName } from "@pixiv/three-vrm";
+import type { ClipLayer } from "./clips";
+import { LegIK } from "./legik";
+import { GESTURES, KEYED_ACTIONS, pickGesture, type Gesture, type KeyedAction } from "./moves";
 import type { Emotion, Mood, State } from "../types";
 import type { BodyMode, DesktopInput } from "./types";
+import {
+  Spring,
+  approach,
+  envelope,
+  follow,
+  noise1,
+  smoothstep,
+  voiceOpenness,
+  wander,
+} from "./smooth";
 
 type Rot = [number, number, number];
 type Pose = Partial<Record<VRMHumanBoneName, Rot>>;
@@ -106,62 +119,17 @@ const EMOTION_POSES: Partial<Record<Emotion, Pose>> = {
   },
 };
 
-/** Short speaking gestures, played with an attack/hold/release envelope. */
-const GESTURES: Pose[] = [
-  // right hand explains, palm up
-  { rightUpperArm: [-0.5, 0.15, -0.2], rightLowerArm: [0, 1.15, 0], rightHand: [0, -0.7, 0.25] },
-  // left hand explains
-  { leftUpperArm: [-0.5, -0.15, 0.2], leftLowerArm: [0, -1.15, 0], leftHand: [0, 0.7, -0.25] },
-  // both hands open, palms up
-  {
-    rightUpperArm: [-0.5, 0.1, -0.3],
-    rightLowerArm: [0, 1.0, 0],
-    leftUpperArm: [-0.5, -0.1, 0.3],
-    leftLowerArm: [0, -1.0, 0],
-    rightHand: [0, -0.6, 0.15],
-    leftHand: [0, 0.6, -0.15],
-  },
-  // emphatic nod
-  { head: [0.14, 0, 0], neck: [0.07, 0, 0] },
-  // small shrug
-  {
-    leftShoulder: [0, 0, 0.14],
-    rightShoulder: [0, 0, -0.14],
-    head: [0, 0, 0.1],
-    leftUpperArm: [-0.2, 0, 0.15],
-    rightUpperArm: [-0.2, 0, -0.15],
-    leftLowerArm: [0, -0.7, 0],
-    rightLowerArm: [0, 0.7, 0],
-  },
-  // hand on the chest ("я думаю", "мне кажется")
-  {
-    rightUpperArm: [-0.45, 0.3, 0.1],
-    rightLowerArm: [0, 1.9, 0],
-    rightHand: [0, -0.3, 0],
-    head: [0.04, 0, 0.05],
-  },
-  // lean in and point forward with the left hand
-  {
-    leftUpperArm: [-0.9, -0.1, 0.45],
-    leftLowerArm: [0, -0.5, 0],
-    spine: [0.05, 0, 0],
-    head: [0.03, -0.05, 0],
-  },
-  // head tilt with a small open hand
-  {
-    head: [0, 0, -0.12],
-    neck: [0, 0, -0.05],
-    rightUpperArm: [-0.3, 0, 0],
-    rightLowerArm: [0, 0.8, 0],
-  },
-];
-
 /** A one-off, time-varying animation (wave, stretch, hop…). */
 interface Action {
   name: string;
   duration: number;
   t: number;
-  pose(t: number): Pose;
+  /** Procedural pose over time (loops like rocking or kicking). */
+  pose?(t: number): Pose;
+  /** Keyframed motion (moves.ts): starts and ends at rest, so it needs no envelope. */
+  keyed?: KeyedAction;
+  /** Playback speed: keyed actions vary a little every time (no two waves alike). */
+  rate: number;
   face?(t: number): Face;
   /** Hips lift in metres (hops, squats). */
   lift?(t: number): number;
@@ -169,65 +137,17 @@ interface Action {
   look?(t: number): [number, number] | null;
   attack?: number;
   release?: number;
+  /** Played by a .vrma clip: the procedural pose is skipped, face hints stay. */
+  clip?: boolean;
 }
 
-type ActionSpec = Omit<Action, "t">;
+type ActionSpec = Omit<Action, "t" | "rate" | "keyed">;
 
 const sin = Math.sin;
 const bump = (t: number, a: number, b: number): number =>
   t <= a || t >= b ? 0 : sin(((t - a) / (b - a)) * Math.PI);
 
 const ACTIONS: Record<string, () => ActionSpec> = {
-  wave: () => ({
-    name: "wave",
-    duration: 2.4,
-    pose: (t) => ({
-      rightUpperArm: [-0.15, 0.2, -1.5],
-      rightLowerArm: [0, -0.3, -1.3 + sin(t * 10) * 0.35],
-      rightHand: [0, 0, -0.15 + sin(t * 10 + 0.6) * 0.15],
-      head: [0, 0.05, -0.08],
-      spine: [0, 0, -0.03],
-    }),
-    face: () => ({ happy: 0.6 }),
-  }),
-  stretch: () => ({
-    name: "stretch",
-    duration: 3.6,
-    attack: 0.9,
-    release: 0.9,
-    pose: (t) => ({
-      leftUpperArm: [-0.2, 0, 2.45],
-      rightUpperArm: [-0.2, 0, -2.45],
-      leftLowerArm: [0, 0.3, 0.2],
-      rightLowerArm: [0, -0.3, -0.2],
-      spine: [-0.1, 0, sin(t * 1.6) * 0.05],
-      chest: [-0.08, 0, 0],
-      head: [-0.15, 0, 0],
-    }),
-    face: (t) => ({ eyesClosed: 0.85 * bump(t, 0.6, 3.2), aa: 0.35 * bump(t, 0.8, 2.6) }),
-  }),
-  hairTouch: () => ({
-    name: "hairTouch",
-    duration: 2.6,
-    pose: (t) => ({
-      // elbow raised; X twists the raised arm so the forearm points up to the hair
-      rightUpperArm: [-1.3, 0.2, -1.45],
-      rightLowerArm: [0, 2.2 + sin(t * 4) * 0.08, 0],
-      rightHand: [0, 0, 0.3],
-      head: [0, -0.05, 0.12],
-      neck: [0, 0, 0.05],
-    }),
-    face: () => ({ happy: 0.25 }),
-  }),
-  lookAround: () => ({
-    name: "lookAround",
-    duration: 4.2,
-    pose: (t) => {
-      const yaw = sin(t * 1.5) * 0.45;
-      return { head: [0, yaw * 0.6, 0], neck: [0, yaw * 0.4, 0], spine: [0, yaw * 0.15, 0] };
-    },
-    look: (t) => [sin(t * 1.5) * 0.9, 0.05],
-  }),
   rock: () => ({
     // hands clasped in front, rocking heel to toe
     name: "rock",
@@ -253,98 +173,6 @@ const ACTIONS: Record<string, () => ActionSpec> = {
       hips: [0, sin(t * 2.1) * 0.05, 0],
     }),
     face: () => ({ happy: 0.45, eyesClosed: 0.5 }),
-  }),
-  yawn: () => ({
-    name: "yawn",
-    duration: 3.2,
-    pose: () => ({
-      rightUpperArm: [-0.8, 0.3, -0.25],
-      rightLowerArm: [0, 2.25, 0],
-      rightHand: [0, 0, 0.3],
-      head: [-0.12, 0, 0.05],
-      spine: [-0.05, 0, 0],
-    }),
-    face: (t) => ({ aa: 0.8 * bump(t, 0.4, 2.8), eyesClosed: 0.9 * bump(t, 0.3, 3.0) }),
-  }),
-  hop: () => ({
-    name: "hop",
-    duration: 1.1,
-    attack: 0.15,
-    release: 0.3,
-    pose: () => ({
-      leftUpperArm: [0, 0, 0.5],
-      rightUpperArm: [0, 0, -0.5],
-      leftLowerArm: [0, -0.6, 0],
-      rightLowerArm: [0, 0.6, 0],
-      head: [-0.06, 0, 0],
-    }),
-    lift: (t) => 0.07 * Math.max(bump(t, 0.1, 0.45), bump(t, 0.5, 0.85) * 0.6),
-    face: () => ({ happy: 0.9 }),
-  }),
-  clap: () => ({
-    name: "clap",
-    duration: 1.6,
-    pose: (t) => {
-      const c = sin(t * 15) * 0.22;
-      return {
-        leftUpperArm: [-0.75, -0.35, -0.05],
-        rightUpperArm: [-0.75, 0.35, 0.05],
-        leftLowerArm: [0, -1.2 - c, 0],
-        rightLowerArm: [0, 1.2 + c, 0],
-        head: [-0.04, 0, 0],
-      };
-    },
-    face: () => ({ happy: 0.9 }),
-  }),
-  startle: () => ({
-    name: "startle",
-    duration: 1.4,
-    attack: 0.12,
-    release: 0.6,
-    pose: () => ({
-      leftUpperArm: [-0.7, -0.3, 0.2],
-      rightUpperArm: [-0.7, 0.3, -0.2],
-      leftLowerArm: [0, -2.0, 0],
-      rightLowerArm: [0, 2.0, 0],
-      spine: [-0.12, 0, 0],
-      head: [-0.08, 0, 0],
-    }),
-    lift: (t) => 0.025 * bump(t, 0, 0.3),
-    face: () => ({ surprised: 0.9 }),
-  }),
-  sigh: () => ({
-    name: "sigh",
-    duration: 2.4,
-    pose: (t) => {
-      const up = bump(t, 0, 1.0);
-      return {
-        leftShoulder: [0, 0, 0.16 * up],
-        rightShoulder: [0, 0, -0.16 * up],
-        head: [0.12 * bump(t, 0.8, 2.4), 0, 0],
-      };
-    },
-    face: (t) => ({ eyesClosed: 0.6 * bump(t, 0.8, 2.2) }),
-  }),
-  curious: () => ({
-    name: "curious",
-    duration: 1.6,
-    pose: () => ({ head: [0, 0.06, 0.16], neck: [0, 0, 0.06] }),
-  }),
-  nod: () => ({
-    name: "nod",
-    duration: 0.7,
-    attack: 0.15,
-    release: 0.35,
-    pose: () => ({ head: [0.13, 0, 0], neck: [0.05, 0, 0] }),
-  }),
-  poke: () => ({
-    // poked / patted: flinch, then giggle
-    name: "poke",
-    duration: 1.5,
-    attack: 0.08,
-    release: 0.7,
-    pose: () => ({ spine: [0.04, 0, 0.08], head: [0.05, 0, -0.14], leftShoulder: [0, 0, 0.1] }),
-    face: () => ({ happy: 0.7, eyesClosed: 0.7 }),
   }),
   pat: () => ({
     name: "pat",
@@ -446,6 +274,8 @@ const ACTIONS: Record<string, () => ActionSpec> = {
 const IDLE_ACTIONS = ["lookAround", "hairTouch", "rock", "hum", "lookAround", "stretch"];
 /** Idle actions that suit sitting on an edge (no hops or heel rocking). */
 const SIT_ACTIONS = ["kick", "leanBack", "lookDown", "hum", "hairTouch", "lookAround", "kick"];
+/** Actions that only move the head: speech gestures may go on during them. */
+const HEAD_ACTIONS = new Set(["curious", "nod", "notice"]);
 /** Actions that lift or rock the hips: they make no sense while sitting. */
 const STANDING_ONLY = new Set(["hop", "rock", "land"]);
 const EMOTION_ACTIONS: Partial<Record<Emotion, string[]>> = {
@@ -472,29 +302,56 @@ function idlePool(mood: Mood, idleFor: number, sitting: boolean): string[] {
   return pool;
 }
 
-function addPose(target: Pose, delta: Pose, weight: number): void {
-  if (weight <= 0.001) return;
-  for (const [bone, r] of Object.entries(delta) as [VRMHumanBoneName, Rot][]) {
-    const cur = target[bone] ?? [0, 0, 0];
-    target[bone] = [cur[0] + r[0] * weight, cur[1] + r[1] * weight, cur[2] + r[2] * weight];
+/**
+ * Per-frame pose accumulator: one reusable [x, y, z] per bone, so blending the layers does
+ * not allocate a new pose per frame (less garbage, fewer collection hitches).
+ * Bones once touched stay in the set and relax back to the base pose when nothing drives
+ * them, instead of freezing wherever the last layer left them.
+ */
+class PoseBuffer {
+  readonly rot = new Map<VRMHumanBoneName, Float64Array>();
+
+  reset(base: Pose): void {
+    for (const r of this.rot.values()) r.fill(0);
+    this.add(base, 1);
+  }
+
+  add(pose: Pose, weight: number): void {
+    if (weight <= 0.001) return;
+    for (const bone in pose) {
+      const r = pose[bone as VRMHumanBoneName];
+      if (r) this.addRot(bone as VRMHumanBoneName, r[0] * weight, r[1] * weight, r[2] * weight);
+    }
+  }
+
+  addRot(bone: VRMHumanBoneName, x: number, y: number, z: number): void {
+    let r = this.rot.get(bone);
+    if (!r) {
+      r = new Float64Array(3);
+      this.rot.set(bone, r);
+    }
+    r[0] += x;
+    r[1] += y;
+    r[2] += z;
   }
 }
 
-function envelope(t: number, duration: number, attack = 0.35, release = 0.5): number {
-  if (t < attack) return smooth(t / attack);
-  if (t > duration - release) return smooth(Math.max(0, (duration - t) / release));
+/** Attack/hold/release weight of a timed gesture or action. */
+function actionEnvelope(t: number, duration: number, attack = 0.35, release = 0.5): number {
+  if (t < attack) return smoothstep(t / attack);
+  if (t > duration - release) return smoothstep(Math.max(0, (duration - t) / release));
   return 1;
 }
 
-function smooth(x: number): number {
-  const c = Math.min(1, Math.max(0, x));
-  return c * c * (3 - 2 * c);
+function mergeFace(target: Face, face: Face, weight: number): void {
+  for (const key in face) {
+    const value = face[key as keyof Face] ?? 0;
+    target[key as keyof Face] = Math.max(target[key as keyof Face] ?? 0, value * weight);
+  }
 }
 
-function mergeFace(target: Face, face: Face, weight: number): void {
-  for (const [key, value] of Object.entries(face) as [keyof Face, number][]) {
-    target[key] = Math.max(target[key] ?? 0, value * weight);
-  }
+function clearFace(face: Face): void {
+  face.eyesClosed = face.happy = face.surprised = face.sad = face.aa = 0;
 }
 
 /** Per-frame inputs of the desktop body poses. */
@@ -641,6 +498,19 @@ function peekPose(lean: number, time: number): Pose {
 }
 
 const BODY_MODES: BodyMode[] = ["stand", "walk", "sit", "drag", "fall", "peek"];
+const STATES: State[] = ["idle", "listening", "thinking", "speaking"];
+/** Dozing off: head drops forward and aside. */
+const DOZE_POSE: Pose = { head: [0.32, 0, 0.12], neck: [0.12, 0, 0], spine: [0.06, 0, 0] };
+/** Perking up after the wake word: chin up, chest open. */
+const ATTENTION_POSE: Pose = { head: [-0.09, 0, -0.05], spine: [-0.04, 0, 0], neck: [-0.03, 0, 0] };
+const EMOTIONS_WITH_POSE = Object.keys(EMOTION_POSES) as Emotion[];
+const BASE_POSE = basePose();
+const LEFT_FINGERS = FINGERS.flatMap((f) =>
+  SEGMENTS.map((s) => `left${f}${s}` as VRMHumanBoneName),
+);
+const RIGHT_FINGERS = FINGERS.flatMap((f) =>
+  SEGMENTS.map((s) => `right${f}${s}` as VRMHumanBoneName),
+);
 
 /**
  * Natural frequency (rad/s) of each bone's smoothing spring: the torso is heavy and slow,
@@ -652,29 +522,69 @@ function boneOmega(bone: VRMHumanBoneName): number {
     case "spine":
     case "chest":
     case "upperChest":
-      return 9;
+      return 8;
     case "neck":
     case "head":
-      return 11;
+      return 10;
     case "leftShoulder":
     case "rightShoulder":
     case "leftUpperArm":
     case "rightUpperArm":
     case "leftUpperLeg":
     case "rightUpperLeg":
-      return 12;
+      return 11;
     case "leftLowerArm":
     case "rightLowerArm":
     case "leftLowerLeg":
     case "rightLowerLeg":
-      return 14;
+      return 13;
     default:
-      return 17; // hands, feet, fingers, eyes
+      return 16; // hands, feet, fingers, eyes
   }
 }
 
-/** Under 1: a quick pose change overshoots a little and settles, instead of easing in flat. */
-const SPRING_DAMPING = 0.72;
+/**
+ * Damping ratio per bone: the heavy torso and the head settle without overshoot (a wobbly
+ * head looks robotic), limbs overshoot a little and settle (follow-through).
+ */
+function boneDamping(bone: VRMHumanBoneName): number {
+  switch (bone) {
+    case "hips":
+    case "spine":
+    case "chest":
+    case "upperChest":
+    case "neck":
+    case "head":
+      return 0.92;
+    default:
+      return 0.7;
+  }
+}
+
+/** Sideways pelvis travel of the weight shift (m): wider when foot IK keeps the soles put. */
+const HIPS_SWAY = 0.012;
+const HIPS_SWAY_IK = 0.022;
+/** How much the pelvis dips (m) when the weight sits on one leg. */
+const HIPS_DIP = 0.006;
+/** Heel lift of the unloaded leg (rad, about the toe) at a full weight shift. */
+const HEEL_LIFT = 0.1;
+
+/** A running speech gesture: time, speed, size and the fade when its phrase ends. */
+interface GestureRun {
+  gesture: Gesture;
+  t: number;
+  rate: number;
+  gain: number;
+  fade: number;
+  releasing: boolean;
+}
+
+/** Natural frequency of the state and emotion pose blends (rad/s): about 0.6 s to settle. */
+const BLEND_OMEGA = 7;
+
+/** Seconds the hands take back to rest when a phrase ends mid-gesture. */
+const GESTURE_RELEASE = 0.5;
+
 /** Integration step of the springs (stable for every stiffness above). */
 const SPRING_STEP = 1 / 120;
 
@@ -682,30 +592,66 @@ const SPRING_STEP = 1 / 120;
 const PENDULUM_OMEGA = 3.2;
 const PENDULUM_DAMPING = 0.14;
 
+/** Head nod oscillator kicked on stressed syllables: ~2 Hz, settles after one small bounce. */
+const NOD_OMEGA = 13;
+const NOD_DAMPING = 0.55;
+
+/** One bone's smoothing spring: current rotation and angular velocity (Euler, VRM 1.0). */
+interface BoneSpring {
+  node: THREE.Object3D | null;
+  x: Float64Array;
+  v: Float64Array;
+  omega: number;
+  zeta: number;
+}
+
 export class Motion {
-  private current = new Map<VRMHumanBoneName, THREE.Euler>();
-  private velocity = new Map<VRMHumanBoneName, THREE.Vector3>();
+  private springs = new Map<VRMHumanBoneName, BoneSpring>();
+  private pose = new PoseBuffer();
+  private tmpEuler = new THREE.Euler();
+  private tmpQuat = new THREE.Quaternion();
   private stateWeights: Record<State, number> = { idle: 1, listening: 0, thinking: 0, speaking: 0 };
   private emotionWeights = new Map<Emotion, number>();
+  /**
+   * State and emotion poses blend in through critically damped springs: unlike an
+   * exponential approach they start moving gently, so a state change does not jolt the limbs.
+   */
+  private stateBlend = new Map<State, Spring>();
+  private emotionBlend = new Map<Emotion, Spring>();
   private bodyWeights = new Map<BodyMode, number>([["stand", 1]]);
-  private gesture: { pose: Pose; t: number; duration: number } | null = null;
+  /** The current speech gesture and the previous one still fading out under it. */
+  private gesture: GestureRun | null = null;
+  private gestureOut: GestureRun | null = null;
+  private recentGestures: string[] = [];
+  private lastHand: Gesture["hand"] = "";
   private action: Action | null = null;
+  /** An action cut short by a new one: fades out instead of snapping away. */
+  private actionOut: { action: Action; fade: number } | null = null;
   private nextGesture = 0.6;
-  private lastGesture = -1;
   private nextIdle = 6;
   private idleFor = 0;
   private drowsy = 0;
-  private nod = 0;
   private lastState: State = "idle";
   private lastEmotion: Emotion = "neutral";
   private heardPeak = 0;
   private lookTarget = new THREE.Object3D();
+  /** Where the eyes look (camera space), the glance goal, and a tiny saccade offset. */
   private lookOffset = new THREE.Vector3();
   private lookGoal = new THREE.Vector3();
   private saccade = new THREE.Vector3();
   private nextGlance = 3;
   private nextSaccade = 0.5;
+  /** Size of the last gaze jump, read (and cleared) by the avatar to blink with it. */
+  private gazeShift = 0;
+  /** The head follows the eyes part of the way, slower (eyes lead, head follows). */
+  private headYaw = new Spring(0, 5);
+  private headPitch = new Spring(0, 5);
+  /** Cursor position arrives at ~15 Hz in steps: smoothed before it turns the head. */
+  private cursorX = new Spring(0, 9);
+  private cursorY = new Spring(0, 9);
   private hipsY: number | null = null;
+  private hipsX = 0;
+  private hipsZ = 0;
   private baseYaw: number;
   private yaw = 0;
   private attention = 0;
@@ -720,8 +666,46 @@ export class Motion {
   private peekLean = 0;
   private peekOut = false;
   private nextPeek = 3;
+  // idle life
+  private breathPhase = 0;
+  private shiftGoal = 0.7;
+  private nextShift = 5;
+  private weightShift = new Spring(0.7, 2.2);
+  // speech
+  private voice = 0;
+  private voiceEnergy = 0;
+  private voiceLow = 0;
+  private silentFor = 1;
+  private lastSilence = 0;
+  private beatCooldown = 0;
+  /** Beat gesture: a critically damped spring pulled by stressed syllables (smooth push). */
+  private beat = new Spring(0, 14);
+  private nodX = 0;
+  private nodV = 0;
+  /**
+   * Beat and nod drives: a stressed syllable sets a pulse that decays, and the beat spring and
+   * the nod oscillator follow it. Kicking their velocity directly made the hands and the head
+   * jump (an instant change of speed).
+   */
+  private beatDrive = 0;
+  private nodDrive = 0;
   /** Height of the desktop frame in metres (set by the avatar): converts screen speeds. */
   frameMetres = 2.2;
+  /**
+   * How strongly the voice moves the head and body. The desktop mascot is small on screen,
+   * so the avatar raises it above 1 to keep the speech gestures readable.
+   */
+  voiceGain = 1;
+  /** Loudness of the microphone 0..1: the character leans in while it listens. */
+  inputLevel = 0;
+  private listenLean = 0;
+  private reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
+  /** Foot grounding while standing (null if the model has no usable legs). */
+  private legs: LegIK | null;
+  private groundWeight = 1;
+  /** Adds a sampled keyframe rotation to this frame's pose (bound once: no garbage). */
+  private addRot = (bone: VRMHumanBoneName, x: number, y: number, z: number): void =>
+    this.pose.addRot(bone, x, y, z);
   /** Facial hints for this frame, read by the avatar after `update`. */
   face: Face = {};
   /** The character's mood: shapes idle actions and drowsiness. */
@@ -735,30 +719,52 @@ export class Motion {
     camera.add(this.lookTarget); // looks at the camera, plus small glances around
     if (vrm.lookAt) vrm.lookAt.target = this.lookTarget;
     const hips = vrm.humanoid.getNormalizedBoneNode("hips");
-    if (hips) this.hipsY = hips.position.y;
+    if (hips) {
+      this.hipsY = hips.position.y;
+      this.hipsX = hips.position.x;
+      this.hipsZ = hips.position.z;
+    }
     this.baseYaw = vrm.scene.rotation.y;
+    this.legs = LegIK.create(vrm);
   }
 
   /** Perk up: head lifts and turns to the user (decays over ~1.5 s). */
   wake(): void {
     this.attention = 1;
-    this.lookGoal.set(0, 0, 0);
+    this.setLookGoal(0, 0);
     this.drowsy = 0;
     this.idleFor = 0;
   }
 
   /** Play a named one-off action (wave, hop, pat…); replaces an idle action. */
   play(name: string): void {
-    const make = ACTIONS[name];
-    if (!make) return;
+    const keyed = KEYED_ACTIONS[name] as KeyedAction | undefined;
+    const make = ACTIONS[name] as (() => ActionSpec) | undefined;
+    const spec = keyed ? null : make?.();
+    if (!keyed && !spec) return;
     if (this.desktop?.mode === "sit" && STANDING_ONLY.has(name)) return;
     this.drowsy = 0;
     this.idleFor = 0;
     if (this.action && this.action.name === name) {
-      this.action.t = Math.min(this.action.t, (this.action.attack ?? 0.35) + 0.01);
+      // asked again while it plays: a looping action keeps going, a keyed one just finishes
+      if (!this.action.keyed) {
+        this.action.t = Math.min(this.action.t, (this.action.attack ?? 0.35) + 0.01);
+      }
       return;
     }
-    this.action = { ...make(), t: 0 };
+    const action: Action = keyed
+      ? { name, duration: keyed.motion.duration, keyed, t: 0, rate: 0.93 + Math.random() * 0.14 }
+      : { ...(spec as ActionSpec), t: 0, rate: 1 };
+    // a mocap clip of the same name replaces the procedural pose (see clips.ts)
+    const clip = this.clips?.play(name) ?? 0;
+    if (clip > 0) {
+      action.clip = true;
+      action.duration = clip;
+      action.rate = 1;
+      action.lift = undefined;
+    }
+    if (this.action) this.actionOut = { action: this.action, fade: 1 };
+    this.action = action;
   }
 
   /** Desktop mascot input: body mode, facing, cursor gaze (null in the main window). */
@@ -782,170 +788,420 @@ export class Motion {
   /** Debug (`?debug`): hold an extra pose on top of everything, to tune angles by hand. */
   preview: Pose | null = null;
 
+  /** Optional .vrma clips under the procedural layers (set by the avatar once loaded). */
+  clips: ClipLayer | null = null;
+
   get actionName(): string | null {
     return this.action?.name ?? null;
   }
 
+  /** How far the gaze jumped since the last call (0 if it did not): big jumps come with a blink. */
+  takeGazeShift(): number {
+    const shift = this.gazeShift;
+    this.gazeShift = 0;
+    return shift;
+  }
+
   update(state: State, emotion: Emotion, level: number, time: number, dt: number): void {
-    const k = (speed: number) => Math.min(1, dt * speed);
-    const face: Face = {};
-    this.react(state, emotion, level, dt);
+    const reduced = this.reducedMotion.matches;
+    const face = this.face;
+    clearFace(face);
+    this.react(state, emotion, level, dt, reduced);
 
     // blend weights of state, emotion and body poses
-    for (const s of Object.keys(this.stateWeights) as State[]) {
-      this.stateWeights[s] += ((s === state ? 1 : 0) - this.stateWeights[s]) * k(4);
+    for (const s of STATES) {
+      let blend = this.stateBlend.get(s);
+      if (!blend) this.stateBlend.set(s, (blend = new Spring(this.stateWeights[s], BLEND_OMEGA)));
+      this.stateWeights[s] = blend.update(s === state ? 1 : 0, dt);
     }
-    for (const e of Object.keys(EMOTION_POSES) as Emotion[]) {
-      const w = this.emotionWeights.get(e) ?? 0;
-      this.emotionWeights.set(e, w + ((e === emotion ? 1 : 0) - w) * k(3));
+    for (const e of EMOTIONS_WITH_POSE) {
+      let blend = this.emotionBlend.get(e);
+      if (!blend) this.emotionBlend.set(e, (blend = new Spring(0, BLEND_OMEGA * 0.8)));
+      this.emotionWeights.set(e, blend.update(e === emotion ? 1 : 0, dt));
     }
     const mode = this.desktop?.mode ?? "stand";
     for (const m of BODY_MODES) {
-      const w = this.bodyWeights.get(m) ?? 0;
       const speed = m === "drag" || m === "fall" || mode === "drag" ? 10 : 5;
-      this.bodyWeights.set(m, w + ((m === mode ? 1 : 0) - w) * k(speed));
+      this.bodyWeights.set(
+        m,
+        approach(this.bodyWeights.get(m) ?? 0, m === mode ? 1 : 0, speed, dt),
+      );
     }
 
-    const pose = basePose();
-    for (const s of Object.keys(STATE_POSES) as State[])
-      addPose(pose, STATE_POSES[s], this.stateWeights[s]);
-    for (const [e, w] of this.emotionWeights) addPose(pose, EMOTION_POSES[e] ?? {}, w);
+    // layers, bottom to top: base → state → emotion → body mode → gesture → action → life
+    const pose = this.pose;
+    pose.reset(BASE_POSE);
+    for (const s of STATES) pose.add(STATE_POSES[s], this.stateWeights[s]);
+    for (const [e, w] of this.emotionWeights) pose.add(EMOTION_POSES[e] ?? {}, w);
     const stride = this.updateGait(mode, dt);
     this.updateSwing(mode, dt);
     const peek = this.updatePeek(mode, dt, face);
     const body: BodyInput = { time, walkPhase: this.walkPhase, stride, swing: this.swing, peek };
-    for (const [m, w] of this.bodyWeights) addPose(pose, bodyPose(m, body), w);
+    for (const [m, w] of this.bodyWeights) if (w > 0.001) pose.add(bodyPose(m, body), w);
     const carried = this.bodyWeights.get("drag") ?? 0;
     const falling = this.bodyWeights.get("fall") ?? 0;
     mergeFace(face, { surprised: Math.min(1, Math.abs(this.swing) * 1.2) }, carried);
     mergeFace(face, { surprised: 0.7 }, falling);
 
-    if (this.preview) addPose(pose, this.preview, 1);
-    this.updateGesture(state, level, dt);
-    if (this.gesture) {
-      addPose(pose, this.gesture.pose, envelope(this.gesture.t, this.gesture.duration));
+    if (this.preview) pose.add(this.preview, 1);
+    this.updateVoice(state, level, dt, reduced);
+    this.updateGesture(state, dt, reduced);
+    for (const g of [this.gestureOut, this.gesture]) {
+      if (!g) continue;
+      // stressed syllables push the gesturing hands a little further (beat gestures)
+      const w = smoothstep(g.fade) * (g.gain + this.beat.value * 0.3);
+      g.gesture.motion.sample(g.t, this.addRot, w);
     }
 
+    // one-off actions; one that was cut short by a new action fades out under it
     let lift = 0;
     let actionLook: [number, number] | null = null;
+    const out = this.actionOut;
+    if (out) {
+      out.fade = approach(out.fade, 0, 7, dt);
+      lift += this.runAction(out.action, dt, out.fade);
+      if (out.fade < 0.01 || out.action.t >= out.action.duration) this.actionOut = null;
+    }
     if (this.action) {
       const a = this.action;
-      a.t += dt;
-      const w = envelope(a.t, a.duration, a.attack, a.release);
-      addPose(pose, a.pose(a.t), w);
-      if (a.face) mergeFace(face, a.face(a.t), w);
-      if (a.lift) lift += a.lift(a.t) * w;
-      if (a.look) actionLook = a.look(a.t);
+      lift += this.runAction(a, dt, 1);
+      actionLook = this.actionLook(a);
       if (a.t >= a.duration) this.action = null;
     }
 
-    // life: breathing (faster when talking or happy), weight shift, small head drift
-    const excited = Math.max(this.stateWeights.speaking, this.emotionWeights.get("joy") ?? 0);
-    const breathRate = 1.5 + excited * 0.6 - this.drowsy * 0.6;
-    const breath = sin(time * breathRate);
-    const sway = sin(time * 0.45);
     const standing = this.bodyWeights.get("stand") ?? 0;
-    addPose(pose, { chest: [breath * 0.014, 0, 0], upperChest: [breath * 0.012, 0, 0] }, 1);
-    addPose(
-      pose,
-      { hips: [0, sway * 0.03, sway * 0.025], spine: [0, -sway * 0.02, -sway * 0.02] },
-      standing,
-    );
-    addPose(
-      pose,
-      { leftShoulder: [0, 0, breath * 0.015], rightShoulder: [0, 0, -breath * 0.015] },
-      1,
-    );
-    addPose(
-      pose,
-      { neck: [sin(time * 0.9) * 0.015, sin(time * 0.37) * 0.05, sin(time * 0.6) * 0.02] },
-      1,
-    );
-    const speaking = state === "speaking" ? 1 : 0;
-    this.nod += (level * speaking - this.nod) * k(level > this.nod ? 10 : 4);
-    addPose(pose, { head: [this.nod * 0.1, 0, sin(time * 2.1) * 0.03 * speaking] }, 1);
+    // mocap clips bring their own idle life: the procedural one fades out under them
+    this.clips?.update(dt, standing);
+    const clipBody = this.clips?.coversBody ? this.clips.weight : 0;
+    const shift = this.idleLife(time, dt, standing, reduced, 1 - clipBody);
+    this.speechMotion(time, dt, reduced);
 
     // dozing off after a long quiet time
     if (this.drowsy > 0) {
-      addPose(
-        pose,
-        { head: [0.32, 0, 0.12], neck: [0.12, 0, 0], spine: [0.06, 0, 0] },
-        this.drowsy,
-      );
-      mergeFace(face, { eyesClosed: 1 }, smooth(this.drowsy * 1.4 - 0.3));
+      pose.add(DOZE_POSE, this.drowsy);
+      mergeFace(face, { eyesClosed: 1 }, smoothstep(this.drowsy * 1.4 - 0.3));
     }
 
     // perking up after the wake word
     this.attention = Math.max(0, this.attention - dt * 0.7);
-    if (this.attention > 0) {
-      const a = smooth(this.attention);
-      addPose(pose, { head: [-0.09, 0, -0.05], spine: [-0.04, 0, 0], neck: [-0.03, 0, 0] }, a);
-    }
+    if (this.attention > 0) pose.add(ATTENTION_POSE, smoothstep(this.attention));
 
-    // desktop: turn the head toward the cursor
+    // desktop: turn the head toward the cursor (smoothed: it arrives in 15 Hz steps)
     const look = this.desktop?.look;
-    if (look && !actionLook && state !== "thinking") {
-      const x = Math.max(-1, Math.min(1, look[0]));
-      const y = Math.max(-1, Math.min(1, look[1]));
-      addPose(pose, { head: [-y * 0.22, x * 0.4, 0], neck: [-y * 0.08, x * 0.18, 0] }, 1);
-    }
+    const followCursor = !!look && !actionLook && state !== "thinking";
+    const cx = this.cursorX.update(followCursor ? Math.max(-1, Math.min(1, look[0])) : 0, dt);
+    const cy = this.cursorY.update(followCursor ? Math.max(-1, Math.min(1, look[1])) : 0, dt);
+    pose.addRot("head", -cy * 0.22, cx * 0.4, 0);
+    pose.addRot("neck", -cy * 0.08, cx * 0.18, 0);
 
-    // apply through damped springs (and the VRM 0.x axis flip); walking and being carried
-    // need snappier limbs to keep up with the cycle and the hand
-    const humanoid = this.vrm.humanoid;
-    const quick = mode === "walk" || mode === "drag" || mode === "fall" ? 1.5 : 1;
-    const steps = Math.max(1, Math.ceil(dt / SPRING_STEP));
-    const h = dt / steps;
-    for (const [bone, r] of Object.entries(pose) as [VRMHumanBoneName, Rot][]) {
-      const node = humanoid.getNormalizedBoneNode(bone);
-      if (!node) continue;
-      let euler = this.current.get(bone);
-      let v = this.velocity.get(bone);
-      if (!euler || !v) {
-        euler = new THREE.Euler(r[0], r[1], r[2]);
-        v = new THREE.Vector3();
-        this.current.set(bone, euler);
-        this.velocity.set(bone, v);
-      }
-      const w = boneOmega(bone) * quick;
-      const stiffness = w * w;
-      const damping = 2 * SPRING_DAMPING * w;
-      for (let i = 0; i < steps; i++) {
-        v.x += (stiffness * (r[0] - euler.x) - damping * v.x) * h;
-        v.y += (stiffness * (r[1] - euler.y) - damping * v.y) * h;
-        v.z += (stiffness * (r[2] - euler.z) - damping * v.z) * h;
-        euler.x += v.x * h;
-        euler.y += v.y * h;
-        euler.z += v.z * h;
-      }
-      node.rotation.set(euler.x * this.axis, euler.y, euler.z * this.axis);
-    }
+    this.updateGaze(state, time, dt, actionLook, reduced);
+    // eyes lead, the head turns part of the way after them (not when an action or the
+    // cursor already turns the head)
+    const headFollows = !actionLook && !followCursor ? 1 : 0;
+    const yaw = this.headYaw.update(this.lookOffset.x * 0.32 * headFollows, dt);
+    const pitch = this.headPitch.update(this.lookOffset.y * 0.22 * headFollows, dt);
+    pose.addRot("head", -pitch * 0.65, yaw * 0.6, 0);
+    pose.addRot("neck", -pitch * 0.35, yaw * 0.4, 0);
 
-    // hips height: joy bounce, hops, walking bob (lowest with the legs apart), landing squat
-    const hips = humanoid.getNormalizedBoneNode("hips");
+    // walking and being carried need snappier limbs to keep up with the cycle and the hand
+    this.applySprings(mode === "walk" || mode === "drag" || mode === "fall" ? 1.5 : 1, dt);
+
+    // hips: joy bounce, hops, walking bob (lowest with the legs apart), landing squat, and
+    // the pelvis drifting over the loaded leg
+    const hips = this.vrm.humanoid.getNormalizedBoneNode("hips");
     if (hips && this.hipsY !== null) {
       const joy = this.emotionWeights.get("joy") ?? 0;
       const walk = this.bodyWeights.get("walk") ?? 0;
       const seated = this.bodyWeights.get("sit") ?? 0;
       const bounce = Math.abs(sin(time * 6)) * 0.012 * joy * standing;
       const bob = (0.5 - Math.abs(sin(this.walkPhase))) * stride * 0.07 * walk;
-      hips.position.y = this.hipsY + bounce + bob + lift * (1 - seated);
+      // with planted feet the pelvis can travel over the loaded foot and dip a little
+      const sway = this.legs ? HIPS_SWAY_IK : HIPS_SWAY;
+      const dip = this.legs ? -HIPS_DIP * Math.abs(shift) : 0;
+      hips.position.y = this.hipsY + bounce + bob + dip + lift * (1 - seated);
+      hips.position.x = this.hipsX + shift * sway * this.axis;
+      // clip hips motion (sway, bounce) on top of the procedural offsets
+      const clips = this.clips;
+      if (clips?.hasHips && clips.weight > 0.001) {
+        hips.position.x += (clips.hips.x - this.hipsX) * clips.weight;
+        hips.position.y += (clips.hips.y - this.hipsY) * clips.weight;
+        hips.position.z = this.hipsZ + (clips.hips.z - this.hipsZ) * clips.weight;
+      }
     }
 
     // whole-body turn toward the walking direction
     const facing = mode === "walk" ? (this.desktop?.facing ?? 0) : 0;
-    this.yaw += (facing * 1.2 - this.yaw) * k(6);
+    this.yaw = approach(this.yaw, facing * 1.2, 6, dt);
     this.vrm.scene.rotation.y = this.baseYaw + this.yaw;
 
-    this.updateGaze(state, time, dt, actionLook);
-    this.face = face;
+    // feet stay planted while standing (mocap clips place their own feet); the unloaded
+    // leg's heel comes up a little
+    // (the grounding weight comes in quicker than the standing pose: on landing the feet
+    // must meet the floor at once instead of sinking through it while the legs straighten)
+    this.groundWeight = approach(this.groundWeight, mode === "stand" ? 1 : 0, 25, dt);
+    const ik = this.groundWeight * (1 - (this.clips?.weight ?? 0));
+    const heel = HEEL_LIFT * (reduced ? 0.5 : 1);
+    this.legs?.solve(ik, heel * Math.max(0, -shift), heel * Math.max(0, shift));
+  }
+
+  /** Advances an action and adds its pose and face at `weight`; returns its hips lift. */
+  private runAction(a: Action, dt: number, weight: number): number {
+    a.t += dt * a.rate;
+    const t = a.t;
+    if (a.keyed) {
+      const k = a.keyed;
+      if (!a.clip) k.motion.sample(t, this.addRot, weight);
+      if (k.face) {
+        for (const key in k.face) {
+          const curve = k.face[key as keyof typeof k.face];
+          if (curve) mergeFace(this.face, { [key]: curve.at(t) }, weight);
+        }
+      }
+      return a.clip ? 0 : (k.lift?.at(t) ?? 0) * weight;
+    }
+    const w = actionEnvelope(t, a.duration, a.attack, a.release) * weight;
+    if (!a.clip && a.pose) this.pose.add(a.pose(t), w);
+    if (a.face) mergeFace(this.face, a.face(t), w);
+    return a.lift ? a.lift(t) * w : 0;
+  }
+
+  private actionLook(a: Action): [number, number] | null {
+    const look = a.keyed?.look;
+    if (look) return [look[0].at(a.t), look[1].at(a.t)];
+    return a.look ? a.look(a.t) : null;
+  }
+
+  /**
+   * Idle life on top of every pose: breathing, a slow weight shift from leg to leg with the
+   * spine counter-rotating to keep the head level, and small uncorrelated drifts of the
+   * spine, head, arms and fingers (gradient noise: no visible period, no bones in sync).
+   * Returns the weight shift (-1..1) for the hips' sideways drift.
+   */
+  private idleLife(
+    time: number,
+    dt: number,
+    standing: number,
+    reduced: boolean,
+    strength = 1,
+  ): number {
+    const pose = this.pose;
+    const amp = (reduced ? 0.35 : 1) * strength;
+    const excited = Math.max(this.stateWeights.speaking, this.emotionWeights.get("joy") ?? 0);
+    // breathing: ~14 breaths a minute, quicker when excited, slower when drowsy; the inhale
+    // is shorter than the exhale and every breath has its own depth
+    const rate = 0.23 + excited * 0.08 - this.drowsy * 0.07 + wander(time * 0.05, 1) * 0.025;
+    this.breathPhase = (this.breathPhase + dt * rate) % 1;
+    const p = this.breathPhase;
+    const depth = (1 + wander(time * 0.11, 2) * 0.3) * (reduced ? 0.6 : 1);
+    const b = (p < 0.4 ? smoothstep(p / 0.4) : 1 - smoothstep((p - 0.4) / 0.6)) * depth;
+    pose.addRot("upperChest", -0.022 * b, 0, 0);
+    pose.addRot("chest", -0.014 * b, 0, 0);
+    pose.addRot("spine", 0.006 * b, 0, 0);
+    pose.addRot("neck", 0.016 * b, 0, 0); // the head stays put while the chest rises
+    pose.addRot("leftShoulder", 0, 0, 0.028 * b);
+    pose.addRot("rightShoulder", 0, 0, -0.028 * b);
+    pose.addRot("leftUpperArm", 0, 0, -0.012 * b);
+    pose.addRot("rightUpperArm", 0, 0, 0.012 * b);
+
+    // weight shift: now and then the weight moves to the other leg (standing only)
+    this.nextShift -= dt;
+    if (this.nextShift <= 0) {
+      this.shiftGoal = -Math.sign(this.shiftGoal || 1) * (0.45 + Math.random() * 0.55);
+      this.nextShift = 6 + Math.random() * 11;
+    }
+    const s =
+      (this.weightShift.update(this.shiftGoal, dt) + wander(time * 0.13, 3) * 0.25) *
+      standing *
+      amp;
+    const loadL = Math.max(0, s);
+    const loadR = Math.max(0, -s);
+    pose.addRot("hips", 0, wander(time * 0.08, 4) * 0.035 * amp, 0.04 * s);
+    // the spine bends back so the shoulders stay level, the legs counter the pelvis roll
+    pose.addRot("spine", 0, -wander(time * 0.08, 4) * 0.02 * amp, -0.032 * s);
+    pose.addRot("chest", 0, 0, -0.012 * s);
+    pose.addRot("leftUpperLeg", -0.05 * loadR, 0, -0.04 * s);
+    pose.addRot("rightUpperLeg", -0.05 * loadL, 0, -0.04 * s);
+    // the unloaded leg relaxes: knee forward, heel a little up
+    pose.addRot("leftLowerLeg", 0.12 * loadR, 0, 0);
+    pose.addRot("rightLowerLeg", 0.12 * loadL, 0, 0);
+    pose.addRot("leftFoot", -0.06 * loadR, 0, 0);
+    pose.addRot("rightFoot", -0.06 * loadL, 0, 0);
+
+    // micro-motion: each channel wanders on its own
+    const a = amp;
+    pose.addRot("spine", wander(time * 0.21, 5) * 0.012 * a, wander(time * 0.17, 6) * 0.015 * a, 0);
+    pose.addRot("chest", 0, wander(time * 0.23, 7) * 0.01 * a, 0);
+    const hx = wander(time * 0.25, 8) * 0.035 * a;
+    const hy = wander(time * 0.19, 9) * 0.06 * a;
+    const hz = wander(time * 0.16, 10) * 0.035 * a;
+    pose.addRot("head", hx, hy, hz - 0.35 * 0.04 * s); // keeps the head near level
+    pose.addRot("neck", hx * 0.4, hy * 0.4, hz * 0.3 - 0.2 * 0.04 * s);
+    pose.addRot(
+      "leftUpperArm",
+      wander(time * 0.2, 11) * 0.03 * a,
+      0,
+      wander(time * 0.15, 12) * 0.02 * a,
+    );
+    pose.addRot(
+      "rightUpperArm",
+      wander(time * 0.2, 13) * 0.03 * a,
+      0,
+      wander(time * 0.15, 14) * 0.02 * a,
+    );
+    pose.addRot("leftLowerArm", 0, wander(time * 0.22, 15) * 0.05 * a, 0);
+    pose.addRot("rightLowerArm", 0, wander(time * 0.22, 16) * 0.05 * a, 0);
+    pose.addRot(
+      "leftHand",
+      wander(time * 0.3, 17) * 0.05 * a,
+      0,
+      wander(time * 0.27, 18) * 0.04 * a,
+    );
+    pose.addRot(
+      "rightHand",
+      wander(time * 0.3, 19) * 0.05 * a,
+      0,
+      wander(time * 0.27, 20) * 0.04 * a,
+    );
+    const curlL = wander(time * 0.18, 21) * 0.07 * a;
+    const curlR = wander(time * 0.18, 22) * 0.07 * a;
+    for (const bone of LEFT_FINGERS) pose.addRot(bone, 0, 0, -curlL);
+    for (const bone of RIGHT_FINGERS) pose.addRot(bone, 0, 0, curlR);
+    return s;
+  }
+
+  /**
+   * Speech energy from the voice level: a gated envelope (like the mouth), a slow
+   * phrase-level energy, syllable beats (sharp rises after a dip) and silences.
+   */
+  private updateVoice(state: State, level: number, dt: number, reduced: boolean): void {
+    const speaking = state === "speaking";
+    const v = speaking ? voiceOpenness(level) : 0;
+    this.voice = envelope(this.voice, v, 25, 7, dt);
+    this.voiceEnergy = envelope(this.voiceEnergy, v, 2.5, 0.7, dt);
+    this.voiceLow = v < this.voiceLow ? v : approach(this.voiceLow, v, 5, dt);
+    this.silentFor = v < 0.05 ? this.silentFor + dt : 0;
+    this.beatCooldown -= dt;
+    this.beatDrive = approach(this.beatDrive, 0, 10, dt);
+    this.nodDrive = approach(this.nodDrive, 0, 8, dt);
+    this.beat.update(this.beatDrive, dt);
+    if (speaking && v - this.voiceLow > 0.3 && this.beatCooldown <= 0) {
+      // a stressed syllable: a small nod, stronger on loud ones; not on every syllable
+      const strength = Math.min(1, v) * (0.6 + Math.random() * 0.4);
+      if (Math.random() < 0.65) this.nodDrive += strength * (reduced ? 0.04 : 0.09);
+      this.beatDrive += strength * 0.45;
+      this.beatCooldown = 0.3 + Math.random() * 0.35;
+      this.voiceLow = v;
+    }
+    // nod oscillator (head pitch, rad): kicked by beats, settles after a small rebound
+    const steps = Math.max(1, Math.ceil(dt / SPRING_STEP));
+    const h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      this.nodV +=
+        (-NOD_OMEGA * NOD_OMEGA * (this.nodX - this.nodDrive) -
+          2 * NOD_DAMPING * NOD_OMEGA * this.nodV) *
+        h;
+      this.nodX += this.nodV * h;
+    }
+  }
+
+  /** Head and torso motion while talking: beat nods, prosody drift, leaning into loud parts. */
+  private speechMotion(time: number, dt: number, reduced: boolean): void {
+    const pose = this.pose;
+    const talking = this.stateWeights.speaking;
+    const energy = this.voiceEnergy * talking;
+    // voice gain > 1 (desktop): bigger movement to stay readable; reduced motion: smaller
+    const gain = reduced ? 0.5 : this.voiceGain;
+    const nod = this.nodX * 0.09 * gain;
+    pose.addRot("head", nod - this.voice * talking * 0.025, 0, 0);
+    pose.addRot("neck", nod * 0.4, 0, 0);
+    pose.addRot(
+      "head",
+      wander(time * 0.55, 30) * 0.03 * energy * gain,
+      wander(time * 0.45, 31) * 0.07 * energy * gain,
+      wander(time * 0.4, 32) * 0.05 * energy * gain,
+    );
+    pose.addRot("spine", 0.025 * energy * gain, wander(time * 0.3, 33) * 0.03 * energy * gain, 0);
+    if (gain > 1) {
+      const extra = (gain - 1) * energy;
+      pose.addRot("leftShoulder", 0, 0, 0.08 * extra * this.voice);
+      pose.addRot("rightShoulder", 0, 0, -0.08 * extra * this.voice);
+      // listening: lean toward the speaker as the microphone level rises
+      const heard = this.stateWeights.listening * this.inputLevel;
+      this.listenLean = envelope(this.listenLean, heard, 8, 3, dt);
+      pose.addRot("spine", this.listenLean * 0.12, 0, 0);
+      pose.addRot("head", this.listenLean * 0.08, 0, 0);
+    }
+  }
+
+  /** Drive every bone toward the pose through its damped spring (and the VRM 0.x flip). */
+  private applySprings(quick: number, dt: number): void {
+    const humanoid = this.vrm.humanoid;
+    const clipWeight = this.clips?.weight ?? 0;
+    const steps = Math.max(1, Math.ceil(dt / SPRING_STEP));
+    const h = dt / steps;
+    for (const [bone, r] of this.pose.rot) {
+      let s = this.springs.get(bone);
+      if (!s) {
+        s = {
+          node: humanoid.getNormalizedBoneNode(bone),
+          x: Float64Array.from(r),
+          v: new Float64Array(3),
+          omega: boneOmega(bone),
+          zeta: boneDamping(bone),
+        };
+        this.springs.set(bone, s);
+      }
+      if (!s.node) continue;
+      const w = s.omega * quick;
+      const stiffness = w * w;
+      const damping = 2 * s.zeta * w;
+      const { x, v } = s;
+      for (let i = 0; i < steps; i++) {
+        for (let k = 0; k < 3; k++) {
+          v[k] += (stiffness * (r[k] - x[k]) - damping * v[k]) * h;
+          x[k] += v[k] * h;
+        }
+      }
+      s.node.rotation.set(x[0] * this.axis, x[1], x[2] * this.axis);
+      if (clipWeight > 0.001) this.blendClip(bone, s.node, x, clipWeight);
+    }
+    // bones only the clips move (thumbs, toes…): from the rest pose to the clip by weight
+    const clips = this.clips;
+    if (!clips) return;
+    for (const [bone, q] of clips.pose) {
+      if (this.pose.rot.has(bone)) continue;
+      humanoid.getNormalizedBoneNode(bone)?.quaternion.identity().slerp(q, clipWeight);
+    }
+  }
+
+  /**
+   * Mocap layer: the clip rotation with the procedural offsets (state poses, gestures,
+   * speech, gaze: everything above the relaxed base pose) applied on top, blended in by the
+   * layer weight. Bones the procedural layers never touch keep the clip as the mixer set it.
+   */
+  private blendClip(
+    bone: VRMHumanBoneName,
+    node: THREE.Object3D,
+    x: Float64Array,
+    weight: number,
+  ): void {
+    const clip = this.clips?.pose.get(bone);
+    if (!clip) return;
+    const base = BASE_POSE[bone];
+    const offset = this.tmpEuler.set(
+      (x[0] - (base?.[0] ?? 0)) * this.axis,
+      x[1] - (base?.[1] ?? 0),
+      (x[2] - (base?.[2] ?? 0)) * this.axis,
+    );
+    const target = this.tmpQuat.setFromEuler(offset).premultiply(clip);
+    node.quaternion.slerp(target, weight);
   }
 
   /** Spontaneous reactions: emotion one-shots, listening nods, idle actions, drowsiness. */
-  private react(state: State, emotion: Emotion, level: number, dt: number): void {
+  private react(state: State, emotion: Emotion, level: number, dt: number, reduced: boolean): void {
     if (emotion !== this.lastEmotion) {
       const options = EMOTION_ACTIONS[emotion];
-      if (options) this.play(options[Math.floor(Math.random() * options.length)]);
+      if (options && !reduced) this.play(options[Math.floor(Math.random() * options.length)]);
       this.lastEmotion = emotion;
     }
     if (state !== this.lastState) {
@@ -958,7 +1214,7 @@ export class Motion {
     }
     // backchannel: a small nod when the user pauses after a phrase
     if (state === "listening") {
-      this.heardPeak = Math.max(this.heardPeak * (1 - dt * 0.5), level);
+      this.heardPeak = Math.max(this.heardPeak * Math.exp(-dt * 0.5), level);
       if (this.heardPeak > 0.25 && level < 0.06 && !this.action) {
         this.play("nod");
         this.heardPeak = 0;
@@ -977,7 +1233,8 @@ export class Motion {
     if (this.idleFor > dozeAfter) this.drowsy = Math.min(1, this.drowsy + dt * 0.08);
     if (this.drowsy > 0) return;
     this.nextIdle -= dt;
-    if (this.nextIdle <= 0 && !this.action && emotion === "neutral") {
+    // with reduced motion the character stays calm: no fidgeting on her own
+    if (this.nextIdle <= 0 && !this.action && emotion === "neutral" && !reduced) {
       const pool = idlePool(this.mood, this.idleFor, sitting);
       const idleFor = this.idleFor;
       this.play(pool[Math.floor(Math.random() * pool.length)]);
@@ -1026,7 +1283,7 @@ export class Motion {
       }
       goal = this.peekOut ? 0.9 : 0.35;
     }
-    this.peekLean += (goal - this.peekLean) * Math.min(1, dt * 3);
+    this.peekLean = approach(this.peekLean, goal, 3, dt);
     return this.peekLean * (this.desktop?.facing || 1);
   }
 
@@ -1035,7 +1292,7 @@ export class Motion {
     const vx = mode === "drag" ? (this.desktop?.vx ?? 0) : 0;
     if (dt > 0) {
       const raw = (vx - this.lastVx) / dt;
-      this.accelX += (raw - this.accelX) * Math.min(1, dt * 12);
+      this.accelX = approach(this.accelX, raw, 12, dt);
     }
     this.lastVx = vx;
     if (mode !== "drag" && Math.abs(this.swing) < 0.01 && Math.abs(this.swingVelocity) < 0.01) {
@@ -1058,60 +1315,122 @@ export class Motion {
     }
   }
 
-  private updateGesture(state: State, level: number, dt: number): void {
-    if (this.gesture) {
-      this.gesture.t += dt;
-      if (this.gesture.t >= this.gesture.duration) this.gesture = null;
-      return;
+  /**
+   * Speech gestures: a phrase-opening gesture when the voice starts after a pause, shorter
+   * ones inside long phrases; when the phrase ends (silence) the hands go back to rest.
+   */
+  private updateGesture(state: State, dt: number, reduced: boolean): void {
+    const phraseStart = this.silentFor === 0 && this.voice > 0.2 && this.lastSilence > 0.25;
+    this.lastSilence = this.silentFor > 0 ? this.silentFor : this.lastSilence * Math.exp(-dt * 8);
+    for (const g of [this.gesture, this.gestureOut]) {
+      if (!g) continue;
+      g.t += dt * g.rate;
+      if (g.releasing) g.fade = Math.max(0, g.fade - dt / GESTURE_RELEASE);
     }
-    if (state !== "speaking" || this.action) {
+    const out = this.gestureOut;
+    if (out && (out.fade <= 0 || out.t >= out.gesture.motion.duration)) this.gestureOut = null;
+    const g = this.gesture;
+    if (g) {
+      if (g.fade <= 0 || g.t >= g.gesture.motion.duration) this.gesture = null;
+      else if (!g.releasing) {
+        // the phrase is over (or the talk is): ease back to rest from wherever the hands are
+        if (state !== "speaking" || this.silentFor > 0.35 || this.busyHands()) g.releasing = true;
+        else return;
+      }
+    }
+    if (state !== "speaking" || this.busyHands()) {
       this.nextGesture = 0.4;
       return;
     }
-    this.nextGesture -= dt * (0.6 + level); // louder speech -> livelier gestures
-    if (this.nextGesture > 0) return;
-    let index = Math.floor(Math.random() * GESTURES.length);
-    if (index === this.lastGesture) index = (index + 1) % GESTURES.length;
-    this.lastGesture = index;
-    this.gesture = { pose: GESTURES[index], t: 0, duration: 1.3 + Math.random() * 1.2 };
-    this.nextGesture = 0.7 + Math.random() * 1.6;
+    // livelier speech gestures more; a new phrase after a pause is a natural moment to start
+    this.nextGesture -= dt * (0.5 + this.voiceEnergy);
+    if (this.nextGesture > 0 && !(phraseStart && this.nextGesture < 0.9)) return;
+    if (this.voiceEnergy < 0.08 && !phraseStart) return; // waiting out a pause
+    const next = pickGesture(this.voiceEnergy, phraseStart, this.recentGestures, this.lastHand);
+    const gain = Math.min(1.1, 0.7 + this.voiceEnergy * 0.45) * (reduced ? 0.5 : 1);
+    this.startGesture(next, gain);
+    this.nextGesture = 0.5 + Math.random() * 1.2;
   }
 
+  private startGesture(next: Gesture, gain: number): void {
+    this.recentGestures = [next.name, ...this.recentGestures].slice(0, 2);
+    if (next.hand) this.lastHand = next.hand;
+    // the one still easing out keeps fading under the new one (co-articulation)
+    if (this.gesture) this.gestureOut = this.gesture;
+    this.gesture = {
+      gesture: next,
+      t: 0,
+      rate: 0.9 + Math.random() * 0.25,
+      gain,
+      fade: 1,
+      releasing: false,
+    };
+  }
+
+  /** Debug (`?debug`): start a speech gesture by name (it runs while the state is speaking). */
+  gestureNow(name: string, gain = 1): void {
+    const gesture = GESTURES.find((g) => g.name === name);
+    if (gesture) this.startGesture(gesture, gain);
+  }
+
+  /** An action that moves the arms runs: no speech gestures on top of it. */
+  private busyHands(): boolean {
+    return !!this.action && !HEAD_ACTIONS.has(this.action.name);
+  }
+
+  private setLookGoal(x: number, y: number): void {
+    const jump = Math.hypot(x - this.lookGoal.x, y - this.lookGoal.y);
+    if (jump > 0.05) this.gazeShift = Math.max(this.gazeShift, jump);
+    this.lookGoal.set(x, y, 0);
+  }
+
+  /**
+   * Eye gaze: mostly at the user (the camera), glances away now and then (more often while
+   * talking, like people searching for words), with micro-saccades. The eyes jump quickly to
+   * a new target, the head follows slower (see `update`).
+   */
   private updateGaze(
     state: State,
     time: number,
     dt: number,
     actionLook: [number, number] | null,
+    reduced: boolean,
   ): void {
     this.nextGlance -= dt;
     this.nextSaccade -= dt;
     const cursor = this.desktop?.look;
     if (actionLook) {
-      this.lookGoal.set(actionLook[0], actionLook[1], 0);
+      this.setLookGoal(actionLook[0], actionLook[1]);
     } else if (state === "thinking") {
-      this.lookGoal.set(0.35, 0.45, 0); // up and aside
+      this.setLookGoal(0.35, 0.45); // up and aside
     } else if (cursor) {
-      this.lookGoal.set(cursor[0] * 0.8, cursor[1] * 0.6, 0);
-    } else if (state === "idle" && this.nextGlance <= 0) {
-      const away = Math.random() < 0.35;
-      this.lookGoal.set(
-        away ? (Math.random() - 0.5) * 0.9 : 0,
-        away ? (Math.random() - 0.4) * 0.3 : 0,
-        0,
-      );
-      this.nextGlance = 2.5 + Math.random() * 4;
-    } else if (state !== "idle") {
-      this.lookGoal.set(0, 0, 0);
+      this.setLookGoal(this.cursorX.value * 0.8, this.cursorY.value * 0.6);
+    } else if (this.nextGlance <= 0 && (state === "idle" || state === "speaking")) {
+      const away =
+        this.lookGoal.lengthSq() < 1e-4 && Math.random() < (state === "idle" ? 0.4 : 0.3);
+      if (away) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        this.setLookGoal(side * (0.25 + Math.random() * 0.5), (Math.random() - 0.4) * 0.35);
+        // a glance away is short while talking, can linger in idle
+        this.nextGlance = state === "idle" ? 1.2 + Math.random() * 2.5 : 0.5 + Math.random() * 0.6;
+      } else {
+        this.setLookGoal(0, 0);
+        this.nextGlance = 2 + Math.random() * 4;
+      }
+    } else if (state === "listening") {
+      this.setLookGoal(0, 0); // attentive: eyes on the user
     }
-    // tiny eye saccades keep the gaze from looking frozen
+    // micro-saccades keep the gaze from looking frozen
     if (this.nextSaccade <= 0) {
-      this.saccade.set((Math.random() - 0.5) * 0.06, (Math.random() - 0.5) * 0.04, 0);
-      this.nextSaccade = 0.4 + Math.random() * 1.6;
+      const size = reduced ? 0.5 : 1;
+      this.saccade.set((Math.random() - 0.5) * 0.06 * size, (Math.random() - 0.5) * 0.04 * size, 0);
+      this.nextSaccade = 0.3 + Math.random() * 1.4;
     }
-    this.lookOffset.lerp(this.lookGoal, Math.min(1, dt * 3));
+    // eyes move fast (a saccade takes ~50 ms), not a slow drift
+    this.lookOffset.lerp(this.lookGoal, follow(16, dt));
     this.lookTarget.position.set(
       this.lookOffset.x + this.saccade.x,
-      this.lookOffset.y + this.saccade.y + sin(time * 0.3) * 0.02,
+      this.lookOffset.y + this.saccade.y + noise1(time * 0.3) * 0.03,
       0,
     );
   }

@@ -15,7 +15,8 @@ Kind = Literal["timer", "alarm", "reminder"]
 _KEY = "items"
 
 
-def say_duration(seconds: float) -> str:
+def say_duration(seconds: float, *, accusative: bool = False) -> str:
+    """«2 минуты 5 секунд»; ``accusative`` for «на 1 минуту»."""
     seconds = round(seconds)
     hours, rem = divmod(seconds, 3600)
     minutes, secs = divmod(rem, 60)
@@ -23,9 +24,9 @@ def say_duration(seconds: float) -> str:
     if hours:
         parts.append(fmt_count(hours, ("час", "часа", "часов")))
     if minutes:
-        parts.append(fmt_count(minutes, ("минута", "минуты", "минут")))
+        parts.append(fmt_count(minutes, ("минуту" if accusative else "минута", "минуты", "минут")))
     if secs and not hours:
-        parts.append(fmt_count(secs, ("секунда", "секунды", "секунд")))
+        parts.append(fmt_count(secs, ("секунду" if accusative else "секунда", "секунды", "секунд")))
     return " ".join(parts) or "0 секунд"
 
 
@@ -65,8 +66,10 @@ class Timers(Plugin):
             # "таймер на время варки яйца" — not a duration: let the LLM work it out
             # (it can call the set_timer tool with the right number of seconds)
             return False
-        await self._add("timer", time.time() + parsed.value, label=say_duration(parsed.value))
-        await ctx.say(f"Таймер на {say_duration(parsed.value)} запущен.")
+        await self._add(
+            "timer", time.time() + parsed.value, label=say_duration(parsed.value, accusative=True)
+        )
+        await ctx.say(f"Таймер на {say_duration(parsed.value, accusative=True)} запущен.")
         return True
 
     @command(["(поставь|заведи|установи|засеки) таймер"])
@@ -76,8 +79,10 @@ class Timers(Plugin):
         if parsed is None:
             await ctx.say(ctx.g("Не понял длительность.", "Не поняла длительность."))
             return
-        await self._add("timer", time.time() + parsed.value, label=say_duration(parsed.value))
-        await ctx.say(f"Таймер на {say_duration(parsed.value)} запущен.")
+        await self._add(
+            "timer", time.time() + parsed.value, label=say_duration(parsed.value, accusative=True)
+        )
+        await ctx.say(f"Таймер на {say_duration(parsed.value, accusative=True)} запущен.")
 
     @command(
         [
@@ -151,8 +156,10 @@ class Timers(Plugin):
 
     @tool("Поставить таймер")
     async def set_timer(self, seconds: Annotated[int, "Длительность в секундах"]) -> str:
-        await self._add("timer", time.time() + seconds, label=say_duration(seconds))
-        return f"Таймер на {say_duration(seconds)} запущен"
+        await self._add(
+            "timer", time.time() + seconds, label=say_duration(seconds, accusative=True)
+        )
+        return f"Таймер на {say_duration(seconds, accusative=True)} запущен"
 
     @tool(
         "Создать напоминание: через сколько-то минут (in_minutes) или на точное время (at). "

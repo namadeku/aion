@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import queue
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +18,7 @@ from aion.audio.segmenter import Segmenter, SpeechEnd, SpeechStart
 from aion.audio.vad import FRAME, EnergyVad, Frame, Vad
 from aion.config import ConfigStore
 from aion.core import NullOutput
-from aion.core.events import WakeDetected
+from aion.core.events import TtsFinished, TtsStarted, WakeDetected
 from aion.stt.base import Pcm, SttEngine
 from aion.tts.textnorm import normalize_for_speech
 from aion.wakeword.base import find_name, strip_name
@@ -86,10 +87,16 @@ async def voice(
             3: "Аион",
             4: "сколько времени",
             5: "просто разговор в комнате о погоде и всём таком",
+            6: "Который час, Аион",
+            7: "Меня зовут Аион, я ваш персональный ассистент",
+            8: "Лион очень красивый город",
+            9: "Аион, стоп",
         }
     )
     await aion.start()
     pipeline = VoicePipeline(aion, mic, FakeVad(), stt, wake=None)  # type: ignore[arg-type]
+    # the fake STT reads tags out of the samples: leave them untouched
+    pipeline.tuning = replace(pipeline.tuning, normalize=False)
     await pipeline.start()
     yield aion, pipeline, mic, stt
     await pipeline.stop()
@@ -153,7 +160,7 @@ def test_energy_vad() -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [
-        ("Айон, который час?", "аион"),
+        ("Айон, который час?", "айон"),
         ("аион который час", "аион"),
         ("эйон стоп", "эйон"),
         ("а ион который час", "аион"),
@@ -185,11 +192,12 @@ async def test_name_and_command_in_one_phrase(voice: Any) -> None:
     )
     await wait_for(lambda: spoken(aion))
     assert spoken(aion)[0].startswith("Сейчас ")
-    assert [w.word for w in wakes] == ["аион"]
+    assert [w.word for w in wakes] == ["айон"]
 
 
 async def test_speech_without_name_is_ignored(voice: Any) -> None:
-    aion, _pipeline, mic, stt = voice
+    aion, pipeline, mic, stt = voice
+    pipeline.tuning = replace(pipeline.tuning, tail_name=False)
     mic.feed(frames(2.0, speech=True, tag=5) + frames(0.6, speech=False))
     mic.feed(frames(0.5, speech=True, tag=2) + frames(0.6, speech=False))
     await asyncio.sleep(1.0)
@@ -197,6 +205,93 @@ async def test_speech_without_name_is_ignored(voice: Any) -> None:
     # long chatter is checked by its prefix only; the short phrase is transcribed once
     assert len(stt.calls) == 2
     assert max(stt.calls) == pytest.approx(1.2, abs=0.1)
+
+
+async def test_chatter_with_a_close_word_is_ignored(voice: Any) -> None:
+    aion, _pipeline, mic, _stt = voice
+    mic.feed(frames(0.8, speech=True, tag=8) + frames(0.6, speech=False))
+    await asyncio.sleep(0.8)
+    assert spoken(aion) == []
+
+
+async def test_name_after_the_command(voice: Any) -> None:
+    aion, _pipeline, mic, stt = voice
+    mic.feed(frames(2.0, speech=True, tag=6) + frames(0.6, speech=False))
+    await wait_for(lambda: spoken(aion))
+    assert spoken(aion)[0].startswith("Сейчас ")
+    assert len(stt.calls) == 2  # the start check, then the whole phrase
+
+
+async def test_name_after_the_command_can_be_disabled(voice: Any) -> None:
+    aion, pipeline, mic, _stt = voice
+    pipeline.tuning = replace(pipeline.tuning, tail_name=False)
+    mic.feed(frames(2.0, speech=True, tag=6) + frames(0.6, speech=False))
+    await asyncio.sleep(0.8)
+    assert spoken(aion) == []
+
+
+async def test_own_speech_with_the_name_is_not_a_call(voice: Any) -> None:
+    aion, _pipeline, mic, _stt = voice
+    wakes: list[WakeDetected] = []
+    aion.bus.subscribe(WakeDetected, wakes.append)
+    text = "Меня зовут Аион, я ваш персональный ассистент"
+    aion.state.raise_flag("speaking")
+    await aion.bus.publish(TtsStarted(text=text))
+    mic.feed(frames(2.0, speech=True, tag=7) + frames(0.6, speech=False))
+    await asyncio.sleep(1.0)
+    assert wakes == []
+    assert spoken(aion) == []
+
+
+async def test_echo_tail_after_playback_is_dropped(voice: Any) -> None:
+    aion, pipeline, mic, stt = voice
+    text = "Меня зовут Аион, я ваш персональный ассистент"
+    await aion.bus.publish(TtsStarted(text=text))
+    await aion.bus.publish(TtsFinished(text=text))
+    pipeline.activate(5)  # even when we are listening for an answer
+    mic.feed(frames(1.0, speech=True, tag=7) + frames(0.6, speech=False))
+    await asyncio.sleep(0.8)
+    assert spoken(aion) == []
+    assert stt.calls  # it was transcribed, then recognized as our own voice
+
+
+async def test_barge_in_by_name_over_own_speech(voice: Any) -> None:
+    aion, _pipeline, mic, _stt = voice
+    wakes: list[WakeDetected] = []
+    aion.bus.subscribe(WakeDetected, wakes.append)
+    aion.state.raise_flag("speaking")
+    await aion.bus.publish(TtsStarted(text="Сейчас за окном облачно, местами дождь"))
+    mic.feed(frames(1.6, speech=True, tag=9) + frames(0.6, speech=False))
+    await wait_for(lambda: wakes)
+
+
+async def test_speculative_recognition_is_reused(voice: Any) -> None:
+    aion, pipeline, mic, stt = voice
+    pipeline.tuning = replace(pipeline.tuning, speculative_ms=100)
+    pipeline._configure_segmenter()  # pyright: ignore[reportPrivateUsage]
+    pipeline.segmenter.configure(
+        threshold=0.5, min_silence_ms=300, max_utterance_s=15.0, pause_ms=100
+    )
+    await pipeline.push_to_talk()
+    mic.feed(frames(0.8, speech=True, tag=2) + frames(0.8, speech=False))
+    await wait_for(lambda: spoken(aion))
+    assert len(stt.calls) == 1  # started at the pause, reused at the end of the phrase
+
+
+async def test_speculative_recognition_is_dropped_when_speech_resumes(voice: Any) -> None:
+    aion, pipeline, mic, stt = voice
+    pipeline.segmenter.configure(
+        threshold=0.5, min_silence_ms=400, max_utterance_s=15.0, pause_ms=100
+    )
+    await pipeline.push_to_talk()
+    mic.feed(
+        frames(0.6, speech=True, tag=4)
+        + frames(0.2, speech=False)  # a pause inside the phrase
+        + frames(0.6, speech=True, tag=2)
+        + frames(0.8, speech=False)
+    )
+    await wait_for(lambda: spoken(aion))
+    assert max(stt.calls) > 1.2  # the answer came from the whole phrase
 
 
 async def test_name_alone_then_command(voice: Any) -> None:

@@ -16,6 +16,7 @@ import argparse
 import ast
 import importlib.util
 import io
+import re
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "aion"
 ENTRY = ROOT / "build" / "aion_entry.py"
+
+# Files the app reads at runtime (not imports): (source in src/aion, folder inside the bundle).
+# tests/test_build_scripts.py checks that every non-Python file under src/aion is covered.
+DATA: list[tuple[str, str]] = [
+    ("plugins/builtin", "aion/plugins/builtin"),
+    ("ui/static", "aion/ui/static"),
+    ("commands/examples", "aion/commands/examples"),
+    ("commands/packs", "aion/commands/packs"),
+    ("tts/presets.yaml", "aion/tts"),
+]
+
+# Never needed by the assistant (+~35 MB): the Hebrew and Arabic-diacritics models of piper's
+# phonemizer (only loaded for he/ar voices), removed after the build.
+PRUNE = [
+    "piper/hebrew/nakdimon.onnx",
+    "piper/tashkeel/model.onnx",
+]
+EXCLUDED_MODULES = [
+    "torch", "tkinter", "PIL._avif", "pip", "setuptools", "pkg_resources", "_distutils_hack",
+]  # fmt: skip
 
 
 def plugin_imports() -> list[str]:
@@ -44,6 +65,30 @@ def plugin_imports() -> list[str]:
     return sorted(
         m for m in found if m.split(".")[0] not in {"aion", "__future__"} and _is_module(m)
     )
+
+
+def version_info(version: str) -> str:
+    """PyInstaller ``--version-file`` text: what Explorer shows in the exe properties."""
+    nums = [int(p) for p in re.findall(r"\d+", version)[:4]]
+    nums += [0] * (4 - len(nums))
+    tup = tuple(nums)
+    return f"""VSVersionInfo(
+  ffi=FixedFileInfo(filevers={tup}, prodvers={tup}, mask=0x3f, flags=0x0, OS=0x40004,
+    fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+      StringStruct('CompanyName', 'namadeku'),
+      StringStruct('FileDescription', 'Aion voice assistant'),
+      StringStruct('FileVersion', '{version}'),
+      StringStruct('InternalName', 'Aion'),
+      StringStruct('LegalCopyright', 'MIT License; bundles piper-tts (GPL-3.0)'),
+      StringStruct('OriginalFilename', 'Aion.exe'),
+      StringStruct('ProductName', 'Aion'),
+      StringStruct('ProductVersion', '{version}')])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"""
 
 
 def _is_module(name: str) -> bool:
@@ -77,9 +122,12 @@ def main() -> None:
     )
 
     sys.path.insert(0, str(ROOT / "src"))
+    from aion import __version__
     from aion.ui.desktop import ensure_icon
 
     icon = ensure_icon(ROOT / "build" / "aion.ico")
+    version_file = ROOT / "build" / "version_info.txt"
+    version_file.write_text(version_info(__version__), encoding="utf-8")
     sep = ";"  # Windows PyInstaller data separator
     cmd = [
         sys.executable, "-m", "PyInstaller", str(ENTRY),
@@ -92,8 +140,7 @@ def main() -> None:
         "--specpath", str(ROOT / "build"),
         "--additional-hooks-dir", str(ROOT / "scripts" / "pyinstaller_hooks"),
         # plugins and the web UI are loaded from files at runtime
-        "--add-data", f"{SRC / 'plugins' / 'builtin'}{sep}aion/plugins/builtin",
-        "--add-data", f"{SRC / 'ui' / 'static'}{sep}aion/ui/static",
+        "--version-file", str(version_file),
         "--collect-submodules", "aion",
         "--collect-submodules", "uvicorn",
         "--collect-submodules", "num2words",
@@ -107,9 +154,11 @@ def main() -> None:
         "--hidden-import", "pynput.keyboard._win32",
         "--hidden-import", "pynput.mouse._win32",
         "--hidden-import", "pystray._win32",
-        "--exclude-module", "torch",
-        "--exclude-module", "tkinter",
     ]  # fmt: skip
+    for source, target in DATA:
+        cmd += ["--add-data", f"{SRC / source}{sep}{target}"]
+    for module in EXCLUDED_MODULES:
+        cmd += ["--exclude-module", module]
     for module in plugin_imports():
         cmd += ["--hidden-import", module]
     if args.cuda:
@@ -122,6 +171,8 @@ def main() -> None:
     print(" ".join(cmd[3:6]), "…")
     subprocess.run(cmd, check=True, cwd=ROOT)
     exe = ROOT / "dist" / "Aion" / "Aion.exe"
+    for name in PRUNE:
+        (exe.parent / "_internal" / name).unlink(missing_ok=True)
     size = sum(f.stat().st_size for f in exe.parent.rglob("*") if f.is_file()) / 1e6
     print(f"\nГотово: {exe} ({size:.0f} МБ)")
     shutil.rmtree(ROOT / "build" / "pyinstaller", ignore_errors=True)

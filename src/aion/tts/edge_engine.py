@@ -8,6 +8,8 @@ import numpy as np
 
 from aion.tts.base import Audio, TtsEngine, VoiceInfo
 
+SYNTH_TIMEOUT_S = 20.0
+
 
 class EdgeEngine(TtsEngine):
     name = "edge"
@@ -22,9 +24,11 @@ class EdgeEngine(TtsEngine):
             text, voice or "ru-RU-DmitryNeural", rate=f"{percent:+d}%"
         )
         mp3 = bytearray()
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                mp3.extend(chunk["data"])  # pyright: ignore[reportTypedDictNotRequiredAccess]
+        # a half-dead connection would otherwise stall the phrase until the library gives up
+        async with asyncio.timeout(SYNTH_TIMEOUT_S):
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    mp3.extend(chunk["data"])  # pyright: ignore[reportTypedDictNotRequiredAccess]
         return await asyncio.to_thread(_decode_mp3, bytes(mp3))
 
     async def voices(self, language: str = "ru") -> list[VoiceInfo]:

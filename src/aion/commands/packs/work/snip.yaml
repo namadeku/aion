@@ -1,0 +1,8 @@
+name: Вырезка экрана
+triggers:
+  - вырежи кусок экрана
+  - (сделай|сделать) вырезку экрана
+  - snip the screen
+lang: both
+actions:
+  - {type: keys, combo: "win+shift+s"}

@@ -36,6 +36,8 @@ class Store {
   /** Version of an available update, if any. */
   update: string | null = null;
   startup: StartupStatus = { stage: "ready", error: null, voice_enabled: false, downloads: [] };
+  /** Ids of the dialog runs that have started and not finished (drives the «Стоп» button). */
+  activeRuns = new Set<string>();
   /** Smoothed audio levels 0..1, updated ~30 times a second. */
   outputLevel = 0;
   inputLevel = 0;
@@ -45,6 +47,10 @@ class Store {
   private socket: WebSocket | null = null;
   private retry = 0;
   private openReply: HistoryEntry | null = null;
+
+  get runActive(): boolean {
+    return this.activeRuns.size > 0;
+  }
 
   subscribe(fn: Listener): () => void {
     this.listeners.add(fn);
@@ -92,9 +98,12 @@ class Store {
   }
 
   /** Send binary data unless more than `maxBuffered` bytes are still queued (drops the frame). */
-  sendBinary(data: ArrayBuffer, maxBuffered: number): void {
+  /** Sends unless too much is still buffered; returns whether it was sent. */
+  sendBinary(data: ArrayBuffer, maxBuffered: number): boolean {
     const ws = this.socket;
-    if (ws?.readyState === WebSocket.OPEN && ws.bufferedAmount <= maxBuffered) ws.send(data);
+    if (ws?.readyState !== WebSocket.OPEN || ws.bufferedAmount > maxBuffered) return false;
+    ws.send(data);
+    return true;
   }
 
   private handle(e: BusEvent): void {
@@ -118,9 +127,16 @@ class Store {
         if (s.mood) this.mood = s.mood;
         if (s.startup) this.startup = s.startup;
         this.openReply = null;
+        this.activeRuns.clear();
         this.loaded = true;
         break;
       }
+      case "run_started":
+        this.activeRuns.add(String(e.run_id));
+        break;
+      case "run_finished":
+        this.activeRuns.delete(String(e.run_id));
+        break;
       case "state_changed":
         this.state = e.new as State;
         break;
@@ -198,8 +214,13 @@ class Store {
       }>("/api/config");
       const profile = cfg.profiles[cfg.assistant.profile];
       if (profile) {
+        // the config has no clip list: it comes from the model's folder
+        const clips =
+          profile.avatar.kind === "vrm" && profile.avatar.path
+            ? (await api.get<{ clips: string[] }>("/api/avatar/clips")).clips
+            : [];
         this.name = profile.name;
-        this.avatar = profile.avatar;
+        this.avatar = { ...profile.avatar, clips };
         this.notify();
       }
     } catch {

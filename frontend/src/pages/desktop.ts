@@ -2,12 +2,22 @@
 // speech bubble and streams RGBA frames to the backend, which shows them in a per-pixel
 // transparent native window over the Windows desktop (WebView2 cannot be transparent itself).
 
-import { createAvatar } from "../avatar";
+import { avatarKeyOf, createAvatar } from "../avatar";
+import { follow } from "../avatar/smooth";
 import type { Avatar, BodyMode, DesktopInput, Layout, Reaction } from "../avatar/types";
 import { store } from "../store";
 import type { BusEvent } from "../types";
 
-const FPS = 30;
+/**
+ * Frame rate of the mascot. 60 fps makes the motion as fluid as in the main window; when a
+ * frame (render + read-back + send) gets expensive or the backend falls behind, it drops to
+ * 30 fps and tries again later.
+ */
+const FPS_HIGH = 60;
+const FPS_LOW = 30;
+/** Average frame cost (ms) above which the mascot drops to the low rate, and below which it returns. */
+const SLOW_FRAME_MS = 9;
+const FAST_FRAME_MS = 5;
 const WAVE_WORDS =
   /(^|[^а-яё])(привет|здравствуй|доброе утро|добрый (день|вечер)|доброй ночи|пока|до встречи|до свидания|спокойной ночи)/i;
 const REACTIONS = new Set<Reaction>(["wake", "wave", "poke", "pat"]);
@@ -53,7 +63,7 @@ export function desktopApp(root: HTMLElement): void {
 
   async function mountAvatar(): Promise<void> {
     if (!store.loaded) return; // wait for the snapshot: it says which avatar to show
-    const key = `${store.avatar.kind}:${store.avatar.path ?? ""}`;
+    const key = avatarKeyOf(store.avatar);
     if (key === avatarKey) return;
     avatarKey = key;
     avatar?.dispose();
@@ -114,9 +124,12 @@ export function desktopApp(root: HTMLElement): void {
   const start = performance.now();
   let last = start;
   let lastLayoutAt = 0;
+  let fps = FPS_HIGH;
+  let frameCost = 0;
+  let lowSince = 0;
   const loop = (now: number): void => {
     requestAnimationFrame(loop);
-    if (now - last < 1000 / FPS - 2) return;
+    if (document.hidden || now - last < 1000 / fps - 2) return; // paused while nobody sees it
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (!avatar) return;
@@ -138,7 +151,15 @@ export function desktopApp(root: HTMLElement): void {
       sendLayout();
     }
     drawBubble(now, dt);
-    sendFrame();
+    const sent = sendFrame();
+    // adapt the frame rate to what this machine and the backend keep up with
+    frameCost += (performance.now() - now - frameCost) * 0.1;
+    if (fps === FPS_HIGH && (frameCost > SLOW_FRAME_MS || !sent)) {
+      fps = FPS_LOW;
+      lowSince = now;
+    } else if (fps === FPS_LOW && frameCost < FAST_FRAME_MS && now - lowSince > 10_000) {
+      fps = FPS_HIGH;
+    }
   };
   requestAnimationFrame(loop);
 
@@ -160,20 +181,21 @@ export function desktopApp(root: HTMLElement): void {
     }
   }
 
-  function sendFrame(): void {
+  /** Returns false when the backend has not taken the previous frames yet (frame dropped). */
+  function sendFrame(): boolean {
     const pixels = ctx.getImageData(0, 0, width, height).data;
     const buffer = new ArrayBuffer(8 + pixels.length);
     const header = new DataView(buffer);
     header.setUint32(0, width, true);
     header.setUint32(4, height, true);
     new Uint8Array(buffer, 8).set(pixels);
-    store.sendBinary(buffer, pixels.length * 2);
+    return store.sendBinary(buffer, pixels.length * 2);
   }
 
   function drawBubble(now: number, dt: number): void {
     const thinking = store.state === "thinking";
     const visible = thinking || (bubble.text !== "" && now < bubble.until);
-    bubble.alpha += ((visible ? 1 : 0) - bubble.alpha) * Math.min(1, dt * 8);
+    bubble.alpha += ((visible ? 1 : 0) - bubble.alpha) * follow(8, dt);
     if (bubble.alpha < 0.02) {
       if (!visible) bubble.text = "";
       return;

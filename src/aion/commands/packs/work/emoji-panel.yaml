@@ -1,0 +1,7 @@
+name: Панель эмодзи
+triggers:
+  - панель (эмодзи|смайликов)
+  - emoji panel
+lang: both
+actions:
+  - {type: keys, combo: "win+."}

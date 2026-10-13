@@ -1,0 +1,13 @@
+# Example scenario: a five-minute break. "Стоп" or the stop button ends it early.
+name: Короткий перерыв
+triggers:
+  - короткий перерыв
+  - (сделаю|устрою) [небольшой] перерыв
+lang: ru
+enabled: true
+confirm: auto
+description: Засечь пять минут отдыха и позвать обратно
+actions:
+  - {type: say, text: "Засекаю пять минут. Разомнитесь и отдохните от экрана."}
+  - {type: wait, seconds: 300}
+  - {type: say, text: "Пять минут прошли, можно возвращаться."}

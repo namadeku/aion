@@ -1,0 +1,7 @@
+name: Диспетчер задач
+triggers:
+  - открой диспетчер задач
+  - open task manager
+lang: both
+actions:
+  - {type: keys, combo: "ctrl+shift+esc"}

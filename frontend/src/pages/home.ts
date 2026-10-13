@@ -1,18 +1,23 @@
-import { createAvatar } from "../avatar";
+import { avatarKeyOf, createAvatar } from "../avatar";
 import type { Avatar } from "../avatar/types";
-import { h, icons, svgIcon } from "../dom";
+import { logoMark } from "../brand";
+import { createComposer } from "../components/composer";
+import { sharedWorkLog } from "../components/worklog-shared";
+import { h, iconButton, icons, svgIcon } from "../dom";
+import { native } from "../native";
+import { getClassicHud, onPrefsChange } from "../prefs";
 import { store } from "../store";
-import type { HistoryEntry, Mood } from "../types";
+import type { AvatarConfig, HistoryEntry, Mood } from "../types";
 
 /** Replies that greet or say goodbye make the avatar wave. */
 const WAVE_WORDS =
   /(^|[^а-яё])(привет|здравствуй|доброе утро|добрый (день|вечер)|доброй ночи|пока|до встречи|до свидания|спокойной ночи)/i;
 
-/** Mood meters under the name: [field, label, colour]. */
-const MOOD_METERS: [keyof Mood, string, string][] = [
-  ["energy", "энергия", "var(--green)"],
-  ["affection", "симпатия", "var(--accent)"],
-  ["boredom", "скука", "var(--amber)"],
+/** Mood meters in the avatar panel: [field, label]. */
+const MOOD_METERS: [keyof Mood, string][] = [
+  ["energy", "энергия"],
+  ["affection", "симпатия"],
+  ["boredom", "скука"],
 ];
 
 const STATE_LABEL = {
@@ -22,59 +27,76 @@ const STATE_LABEL = {
   speaking: "говорю",
 } as const;
 
+/** What the window's avatar panel shows: the orb stands in for the HUD ring by default. */
+export function panelAvatar(config: AvatarConfig): AvatarConfig {
+  return config.kind === "hud" && !getClassicHud() ? { kind: "orb", path: null } : config;
+}
+
+const time = (ts: number): string =>
+  new Date(ts * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+
+function message(m: HistoryEntry): HTMLElement {
+  const meta = h(
+    "span",
+    { class: "meta" },
+    time(m.ts),
+    m.role === "user" && m.source === "voice" ? h("span", null, "голосом") : null,
+  );
+  if (m.role === "user") {
+    return h(
+      "div",
+      { class: "msg user" },
+      h("div", { class: "msg-body" }, h("div", { class: "bubble" }, m.text), meta),
+      h("span", { class: "msg-avatar", "aria-hidden": "true" }, svgIcon(icons.user)),
+    );
+  }
+  return h(
+    "div",
+    { class: "msg assistant" },
+    h("span", { class: "msg-avatar", "aria-hidden": "true" }, logoMark(18)),
+    h("div", { class: "msg-body" }, h("div", { class: "bubble" }, m.text), meta),
+  );
+}
+
 export function homePage(root: HTMLElement): () => void {
-  // a fresh canvas per avatar: a canvas cannot switch between 2D and WebGL contexts
-  const stage = h("section", { class: "stage" });
-  const name = h("div", { class: "assistant-name" });
-  const chip = h("div", { class: "state-chip" }, h("i"), h("b"));
-  const meters = MOOD_METERS.map(([key, label, color]) => {
-    const fill = h("i", { style: `--meter:${color}` });
-    const row = h("div", { class: "mood-row" }, h("span", null, label), h("b", null, fill));
-    return { key, fill, row };
+  // -- chat column ------------------------------------------------------------------------
+  const thread = h("div", { class: "thread-inner" });
+  const scroller = h(
+    "div",
+    { class: "thread", role: "log", "aria-live": "polite", "aria-label": "Диалог" },
+    thread,
+  );
+  const worklog = sharedWorkLog();
+  const composer = createComposer();
+
+  // -- avatar panel -----------------------------------------------------------------------
+  const stage = h("div", { class: "orb-stage" });
+  const stateName = h("span", { class: "orb-name" });
+  const stateLabel = h("span", { class: "orb-state-label" });
+  const meters = MOOD_METERS.map(([key, label]) => {
+    const fill = h("i");
+    const row = h(
+      "div",
+      { class: "mood-row", "data-key": key },
+      h("span", null, label),
+      h("b", null, fill),
+    );
+    return { key, fill, row, label };
   });
   const mood = h(
     "div",
     { class: "mood", role: "group", "aria-label": "Настроение" },
     ...meters.map((m) => m.row),
   );
-  const messages = h("div", { class: "messages", "aria-live": "polite" });
-  const input = h("input", {
-    type: "text",
-    placeholder: "Напишите или скажите имя ассистента…",
-    "aria-label": "Сообщение",
-  });
-  const muteBtn = h("button", { class: "round", type: "button", title: "Выключить микрофон" });
-  const talkBtn = h(
-    "button",
-    { class: "round", type: "button", title: "Нажми и говори" },
-    svgIcon(icons.mic),
+  const desktopBtn = iconButton(
+    "Выпустить персонажа на рабочий стол",
+    icons.desktop,
+    () => store.send({ type: "desktop_mode", value: true }),
+    "icon-btn orb-action",
   );
-  const desktopBtn = h(
-    "button",
-    { class: "round", type: "button", title: "Выпустить персонажа на рабочий стол" },
-    svgIcon(icons.desktop),
-  );
-  desktopBtn.addEventListener("click", () => store.send({ type: "desktop_mode", value: true }));
-  const stopBtn = h(
-    "button",
-    { class: "round", type: "button", title: "Прервать" },
-    svgIcon(icons.stop),
-  );
-
-  const send = (): void => {
-    const text = input.value.trim();
-    if (!text) return;
-    store.send({ type: "text", text });
-    input.value = "";
-  };
-  input.addEventListener("keydown", (e) => e.key === "Enter" && send());
-  talkBtn.addEventListener("click", () => store.send({ type: "push_to_talk" }));
-  stopBtn.addEventListener("click", () => store.send({ type: "interrupt" }));
-  muteBtn.addEventListener("click", () => store.send({ type: "mute", value: !store.muted }));
-
   const away = h(
     "div",
-    { class: "stage-away", hidden: true },
+    { class: "orb-away", hidden: true },
     h("p", null, "Персонаж гуляет по рабочему столу"),
     h(
       "button",
@@ -86,34 +108,37 @@ export function homePage(root: HTMLElement): () => void {
       "Вернуть в окно",
     ),
   );
-  stage.append(
+  const panel = h(
+    "aside",
+    { class: "orb-panel", "aria-label": "Аватар ассистента" },
+    stage,
     away,
-    h("div", { class: "stage-top" }, name, chip, mood),
     h(
       "div",
-      { class: "stage-bottom" },
+      { class: "orb-foot" },
       h(
         "div",
-        { class: "composer" },
-        input,
-        h(
-          "button",
-          { class: "round", type: "button", title: "Отправить", onclick: send },
-          svgIcon(icons.send),
-        ),
+        { class: "orb-state", role: "status" },
+        h("i", { class: "orb-dot", "aria-hidden": "true" }),
+        stateName,
+        stateLabel,
       ),
-      talkBtn,
-      stopBtn,
-      muteBtn,
+      mood,
       desktopBtn,
     ),
   );
+
   root.append(
     h(
       "div",
       { class: "home" },
-      stage,
-      h("aside", { class: "chat" }, h("header", null, "Диалог"), messages),
+      h(
+        "section",
+        { class: "chat-col", "aria-label": "Чат" },
+        scroller,
+        h("div", { class: "dock" }, worklog.el, composer.el),
+      ),
+      panel,
     ),
   );
 
@@ -124,14 +149,18 @@ export function homePage(root: HTMLElement): () => void {
   let disposed = false;
 
   async function mountAvatar(): Promise<void> {
-    const key = `${store.avatar.kind}:${store.avatar.path ?? ""}`;
+    const config = panelAvatar(store.avatar);
+    const key = avatarKeyOf(config);
     if (key === avatarKey) return;
     avatarKey = key;
     avatar?.dispose();
+    avatar = null;
     canvas?.remove();
+    // a fresh canvas per avatar: a canvas cannot switch between 2D and WebGL contexts
     canvas = h("canvas", { class: "view", "aria-hidden": "true" });
-    stage.prepend(canvas);
-    const created = await createAvatar(canvas, store.avatar);
+    stage.append(canvas);
+    panel.dataset.look = config.kind;
+    const created = await createAvatar(canvas, config);
     if (disposed || key !== avatarKey) created.dispose();
     else avatar = created;
   }
@@ -143,8 +172,9 @@ export function homePage(root: HTMLElement): () => void {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     frame = requestAnimationFrame(loop);
-    // the character is out on the desktop: this hidden window does not need to draw it too
-    if (store.desktop || document.hidden) return;
+    // nothing to draw: the character is on the desktop, the window is minimized or hidden,
+    // or the panel is collapsed on a narrow window
+    if (store.desktop || native.hidden || !stage.offsetWidth) return;
     avatar?.update({
       state: store.state,
       emotion: store.emotion,
@@ -158,78 +188,73 @@ export function homePage(root: HTMLElement): () => void {
   frame = requestAnimationFrame(loop);
 
   // -- reactive parts ---------------------------------------------------------------------
-  let rendered = 0;
+  // follow new messages while the user is at the bottom (also when the work log opens)
+  let stick = true;
+  scroller.addEventListener("scroll", () => {
+    stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60;
+  });
+  const keepBottom = new ResizeObserver(() => {
+    if (stick) scroller.scrollTop = scroller.scrollHeight;
+  });
+  keepBottom.observe(scroller);
+  keepBottom.observe(thread);
+  let rendered = -1;
   let lastText = "";
   function renderMessages(history: HistoryEntry[]): void {
     const tail = history.at(-1);
     if (history.length === rendered && tail?.text === lastText) return;
-    const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 40;
-    messages.replaceChildren(
+    thread.replaceChildren(
       ...(history.length
-        ? history.map((m) =>
-            h(
-              "div",
-              { class: `msg ${m.role}` },
-              m.text,
-              h(
-                "span",
-                { class: "meta" },
-                new Date(m.ts * 1000).toLocaleTimeString("ru-RU", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                }),
-                m.role === "user" && m.source === "voice" ? " · голос" : "",
-              ),
-            ),
-          )
+        ? history.map(message)
         : [
             h(
               "div",
-              { class: "empty" },
-              `Скажите «${store.name}, который час?» или напишите сообщение.`,
+              { class: "thread-empty" },
+              h("p", { class: "thread-empty-title" }, `Скажите «${store.name}, который час?»`),
+              h(
+                "p",
+                null,
+                "или напишите сообщение внизу. Ответ прозвучит голосом и появится здесь.",
+              ),
             ),
           ]),
     );
-    if (atBottom || rendered === 0) messages.scrollTop = messages.scrollHeight;
+    if (stick || rendered <= 0) scroller.scrollTop = scroller.scrollHeight;
     rendered = history.length;
     lastText = tail?.text ?? "";
   }
 
   function sync(): void {
-    name.textContent = store.name;
-    stage.dataset.state = store.state;
-    chip.dataset.state = store.state;
-    chip.querySelector("b")!.textContent = STATE_LABEL[store.state];
+    panel.dataset.state = store.state;
+    stateName.textContent = store.name;
+    stateLabel.textContent = STATE_LABEL[store.state];
     for (const m of meters) {
-      const value = store.mood[m.key];
-      m.fill.style.width = `${Math.round(value * 100)}%`;
-      m.row.title = `${m.row.firstChild?.textContent}: ${Math.round(value * 100)}%`;
+      const value = Math.round(store.mood[m.key] * 100);
+      m.fill.style.width = `${value}%`;
+      m.row.title = `${m.label}: ${value}%`;
     }
-    muteBtn.replaceChildren(svgIcon(store.muted ? icons.micOff : icons.mic));
-    muteBtn.className = `round${store.muted ? " off" : ""}`;
-    muteBtn.title = store.muted ? "Включить микрофон" : "Выключить микрофон";
-    muteBtn.hidden = !store.voiceEnabled;
-    talkBtn.hidden = !store.voiceEnabled || store.muted;
-    talkBtn.className = `round${store.state === "listening" ? " on" : ""}`;
     desktopBtn.hidden = !store.desktopAvailable || store.desktop;
     away.hidden = !store.desktop;
     renderMessages(store.history);
     void mountAvatar();
   }
 
-  const unsubscribe = store.subscribe(sync);
-  const unsubscribeWake = store.on("wake_detected", () => avatar?.react?.("wake"));
-  const unsubscribeReply = store.on("assistant_reply", (e) => {
-    if (typeof e.text === "string" && WAVE_WORDS.test(e.text)) avatar?.react?.("wave");
-  });
+  const offs = [
+    store.subscribe(sync),
+    onPrefsChange(() => void mountAvatar()),
+    store.on("wake_detected", () => avatar?.react?.("wake")),
+    store.on("assistant_reply", (e) => {
+      if (typeof e.text === "string" && WAVE_WORDS.test(e.text)) avatar?.react?.("wave");
+    }),
+  ];
   sync();
-  input.focus();
+  composer.focus();
 
   return () => {
     disposed = true;
-    unsubscribe();
-    unsubscribeWake();
-    unsubscribeReply();
+    keepBottom.disconnect();
+    offs.forEach((off) => off());
+    composer.dispose();
     cancelAnimationFrame(frame);
     avatar?.dispose();
   };

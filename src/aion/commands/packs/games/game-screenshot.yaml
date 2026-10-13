@@ -1,0 +1,7 @@
+name: Скриншот игры
+triggers:
+  - скриншот игры
+  - game screenshot
+lang: both
+actions:
+  - {type: keys, combo: "win+alt+printscreen"}

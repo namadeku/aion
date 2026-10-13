@@ -17,8 +17,9 @@ import re
 import secrets
 import time
 import wave
+from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -64,6 +65,24 @@ class PreviewIn(BaseModel):
 class SecretIn(BaseModel):
     name: str
     value: str
+
+
+class ToggleIn(BaseModel):
+    enabled: bool
+
+
+class FolderToggleIn(BaseModel):
+    path: str
+    enabled: bool
+
+
+class PackIn(BaseModel):
+    enabled: bool = True
+    lang: Literal["ru", "en", "both"] | None = None
+
+
+#: fields of GET /api/commands/{id} that are not part of the YAML
+_COMMAND_VIEW_FIELDS = {"id", "folder", "dangerous", "error", "raw"}
 
 
 class UiServer:
@@ -211,7 +230,10 @@ class UiServer:
             "state": a.state.state,
             "name": a.config.profile.name,
             "profile": a.config.assistant.profile,
-            "avatar": a.config.profile.avatar.model_dump(mode="json"),
+            "avatar": {
+                **a.config.profile.avatar.model_dump(mode="json"),
+                "clips": avatar_animations(a.config.profile.avatar.path),
+            },
             "voice_enabled": a.voice is not None,
             "muted": a.voice.muted if a.voice else False,
             "llm": a.config.llm.provider if a.llm else None,
@@ -292,6 +314,10 @@ class UiServer:
         @api.get("/api/history", dependencies=auth)
         async def history() -> list[dict[str, Any]]:
             return self.conversation.dump()
+
+        @api.get("/api/history/search", dependencies=auth)
+        async def history_search(q: str = "", limit: int = 30) -> list[dict[str, Any]]:
+            return await self.search_history(q, max(1, min(limit, 200)))
 
         if self.logs is not None:
             log_buffer = self.logs
@@ -448,6 +474,8 @@ class UiServer:
             await a.plugins._on_dir_changed(record.path)  # pyright: ignore[reportPrivateUsage]
             return {"ok": True}
 
+        self._command_routes(api, auth)
+
         # -- voice ------------------------------------------------------------------------
 
         @api.get("/api/voices", dependencies=auth)
@@ -475,6 +503,31 @@ class UiServer:
                 logger.exception("Ошибка предпрослушивания голоса")
                 raise HTTPException(400, str(e)) from e
             return Response(_wav(audio.samples, audio.sample_rate), media_type="audio/wav")
+
+        @api.get("/api/voice/presets", dependencies=auth)
+        async def voice_presets() -> list[dict[str, Any]]:
+            """Character presets; apply one by sending its ``patch`` to PATCH /api/config."""
+            from aion.tts.presets import load_presets
+
+            current = a.config.profile.voice
+            profile_id = (
+                a.config.assistant.profile
+                if a.config.assistant.profile in a.config.profiles
+                else next(iter(a.config.profiles))
+            )
+            piper_dir = a.config.paths.models / "piper"
+            return [
+                {
+                    **preset.model_dump(),
+                    "patch": preset.patch(profile_id),
+                    "current": preset.matches(current),
+                    # None = nothing to download (online engine or not file-based)
+                    "installed": (piper_dir / f"{preset.voice}.onnx").exists()
+                    if preset.engine == "piper"
+                    else None,
+                }
+                for preset in load_presets()
+            ]
 
         @api.get("/api/devices", dependencies=auth)
         async def devices() -> list[dict[str, Any]]:
@@ -551,6 +604,11 @@ class UiServer:
 
         # -- avatar files -----------------------------------------------------------------
 
+        @api.get("/api/avatar/clips", dependencies=auth)
+        async def avatar_clips() -> dict[str, Any]:
+            """VRM Animation clips next to the current profile's model (settings page)."""
+            return {"clips": avatar_animations(a.config.profile.avatar.path)}
+
         # The token is part of the path so relative URLs inside model files keep it.
         @api.get("/avatar/{session}/{name:path}")
         async def avatar_file(session: str, name: str) -> Response:
@@ -567,13 +625,192 @@ class UiServer:
 
         return api
 
+    def _command_routes(self, api: FastAPI, auth: list[Any]) -> None:  # noqa: PLR0915
+        """User commands and scenarios (docs/commands-api.md, section 6)."""
+        from aion.commands import Command, CommandError, explain
+
+        a = self.aion
+        engine = a.commands
+        store = engine.store
+
+        def invalid(lines: list[str]) -> JSONResponse:
+            return JSONResponse({"error": lines}, status_code=422)
+
+        # fixed paths first: "{command_id:path}" below would swallow them
+
+        @api.get("/api/commands", dependencies=auth)
+        async def commands_list() -> dict[str, Any]:
+            return engine.listing()
+
+        @api.post("/api/commands/folders/toggle", dependencies=auth)
+        async def commands_folder_toggle(body: FolderToggleIn) -> dict[str, bool]:
+            try:
+                store.toggle_folder(body.path, body.enabled)
+            except KeyError as e:
+                raise HTTPException(404, "Папка не найдена") from e
+            engine.register()
+            return {"ok": True}
+
+        @api.post("/api/commands/import", dependencies=auth)
+        async def commands_import(request: Request, filename: str = "") -> Any:
+            name, data = filename, b""
+            if request.headers.get("content-type", "").startswith("multipart/form-data"):
+                form = await request.form()
+                upload = form.get("file")
+                if upload is None or isinstance(upload, str):
+                    raise HTTPException(400, "Нужен файл в поле file")
+                name, data = upload.filename or name, await upload.read()
+            else:  # the raw file as the body, its name in ?filename=
+                data = await request.body()
+            try:
+                imported, errors = await asyncio.to_thread(store.import_file, name, data)
+            except CommandError as e:
+                return invalid([str(e)])
+            engine.reload()
+            return {"imported": imported, "errors": errors}
+
+        @api.get("/api/commands/export", dependencies=auth)
+        async def commands_export(ids: str = "") -> Response:
+            chosen = [i.strip() for i in ids.split(",") if i.strip()]
+            data = await asyncio.to_thread(store.export, chosen)
+            return Response(
+                data,
+                media_type="application/zip",
+                headers={"Content-Disposition": 'attachment; filename="aion-commands.zip"'},
+            )
+
+        @api.get("/api/commands/packs", dependencies=auth)
+        async def commands_packs() -> list[dict[str, Any]]:
+            return store.packs()
+
+        @api.post("/api/commands/packs/{name}", dependencies=auth)
+        async def commands_pack(name: str, body: PackIn) -> dict[str, bool]:
+            try:
+                await asyncio.to_thread(store.set_pack, name, body.enabled, body.lang)
+            except KeyError as e:
+                raise HTTPException(404, "Пак не найден") from e
+            engine.reload()
+            return {"ok": True}
+
+        @api.post("/api/commands/record/start", dependencies=auth)
+        async def commands_record_start() -> dict[str, bool]:
+            await asyncio.to_thread(engine.recorder.start)
+            return {"ok": True}
+
+        @api.post("/api/commands/record/stop", dependencies=auth)
+        async def commands_record_stop() -> dict[str, Any]:
+            return {"actions": await asyncio.to_thread(engine.recorder.stop)}
+
+        # -- one command --------------------------------------------------------------------
+
+        @api.post("/api/commands/{command_id:path}/toggle", dependencies=auth)
+        async def commands_toggle(command_id: str, body: ToggleIn) -> dict[str, bool]:
+            try:
+                store.toggle(command_id, body.enabled)
+            except KeyError as e:
+                raise HTTPException(404, "Команда не найдена") from e
+            engine.register()
+            return {"ok": True}
+
+        @api.post("/api/commands/{command_id:path}/test", dependencies=auth)
+        async def commands_test(command_id: str) -> dict[str, str]:
+            try:
+                return {"run_id": await engine.start_test(command_id)}
+            except KeyError as e:
+                raise HTTPException(404, "Команда не найдена или в ней ошибка") from e
+
+        @api.get("/api/commands/{command_id:path}", dependencies=auth)
+        async def commands_get(command_id: str) -> dict[str, Any]:
+            entry = store.get(command_id)
+            if entry is None:
+                raise HTTPException(404, "Команда не найдена")
+            view: dict[str, Any] = {"id": entry.id, "folder": entry.folder}
+            if entry.command is None:  # broken file: the editor shows the text to fix it
+                raw = await asyncio.to_thread(entry.path.read_text, "utf-8", "replace")
+                return {**view, "error": entry.error, "raw": raw}
+            return {
+                **view,
+                **entry.command.to_yaml_data(),
+                "enabled": store.is_enabled(entry),
+                "dangerous": engine.is_dangerous(entry),
+                "error": None,
+            }
+
+        @api.put("/api/commands/{command_id:path}", dependencies=auth)
+        async def commands_put(command_id: str, body: dict[str, Any]) -> Any:
+            data = {k: v for k, v in body.items() if k not in _COMMAND_VIEW_FIELDS}
+            try:
+                command = Command.model_validate(data)
+                entry = store.save(command_id, command)
+                if command.enabled and entry.id in store.state.disabled:
+                    store.toggle(entry.id, True)  # "enabled" in the editor means enabled
+            except ValidationError as e:
+                return invalid(explain(e))
+            except CommandError as e:
+                return invalid([str(e)])
+            engine.register()
+            return engine.summary(entry)
+
+        @api.delete("/api/commands/{command_id:path}", dependencies=auth)
+        async def commands_delete(command_id: str) -> dict[str, bool]:
+            if not store.delete(command_id):
+                raise HTTPException(404, "Команда не найдена")
+            engine.register()
+            return {"ok": True}
+
+    async def search_history(self, query: str, limit: int = 30) -> list[dict[str, Any]]:
+        """Messages of the UI journal and diary entries (past conversations) matching ``query``."""
+        from rapidfuzz import fuzz
+
+        from aion.text import normalize
+
+        needle = normalize(query, numbers=False)
+        if not needle:
+            return []
+        found: list[dict[str, Any]] = []
+        for entry in reversed(self.conversation.entries):
+            text = normalize(entry.text, numbers=False)
+            fuzzy = len(needle) >= 4 and fuzz.partial_ratio(needle, text) >= 85
+            if needle in text or fuzzy:
+                found.append({"kind": "message", **asdict(entry)})
+        try:
+            episodes = await self.aion.diary.store.search(query, limit)
+        except Exception:  # the database may be closed or busy: messages are still useful
+            logger.exception("Поиск по дневнику не удался")
+            episodes = []
+        for episode in episodes:
+            found.append(
+                {
+                    "kind": "episode",
+                    "role": "diary",
+                    "text": episode.summary,
+                    "source": "",
+                    "ts": episode.started,
+                    "ended": episode.ended,
+                }
+            )
+        found.sort(key=lambda item: item["ts"], reverse=True)
+        return found[:limit]
+
+    def _on_confirm(self, message: dict[str, Any]) -> None:
+        """ "Да"/"Нет" pressed in the work log for a dangerous step."""
+        answered = self.aion.commands.answer(
+            str(message.get("run_id", "")),
+            str(message.get("step_id", "")),
+            message.get("answer") is True,
+        )
+        if not answered:
+            logger.debug("Ответ на подтверждение опоздал: {}", message)
+
     async def _on_ws_message(self, message: dict[str, Any]) -> None:
         a = self.aion
         match message.get("type"):
             case "text":
                 await a.dialog.submit(str(message.get("text", "")), source="ui")
-            case "interrupt":
+            case "interrupt":  # also cancels a running command (it is the current turn)
                 await a.dialog.interrupt("hotkey")
+            case "confirm":
+                self._on_confirm(message)
             case "push_to_talk":
                 if a.voice is not None:
                     await a.voice.push_to_talk()
@@ -603,6 +840,16 @@ def _local_origin(origin: str) -> bool:
     from urllib.parse import urlparse
 
     return urlparse(origin).hostname in {"127.0.0.1", "localhost"}
+
+
+def avatar_animations(model: Path | None) -> list[str]:
+    """VRM Animation clips (``*.vrma``) next to the avatar model, served via ``/avatar/``."""
+    if model is None:
+        return []
+    folder = Path(model).expanduser().parent
+    with contextlib.suppress(OSError):
+        return sorted(p.name for p in folder.glob("*.vrma") if p.is_file())
+    return []
 
 
 def _errors(e: ValidationError) -> list[str]:

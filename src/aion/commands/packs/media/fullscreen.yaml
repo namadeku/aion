@@ -1,0 +1,7 @@
+name: Во весь экран
+triggers:
+  - (разверни|сделай) на весь экран
+  - full screen
+lang: both
+actions:
+  - {type: keys, combo: "f11"}

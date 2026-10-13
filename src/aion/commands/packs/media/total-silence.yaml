@@ -1,0 +1,7 @@
+name: Полная тишина
+triggers:
+  - полная тишина
+  - total silence
+lang: both
+actions:
+  - {type: volume, mute: true}

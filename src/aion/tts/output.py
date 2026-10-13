@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections import defaultdict, deque
 from pathlib import Path
 
@@ -12,12 +13,14 @@ from aion.audio import effects
 from aion.audio.player import AudioPlayer
 from aion.config import ConfigStore, VoiceConfig
 from aion.core.bus import EventBus
+from aion.core.errors import user_message
 from aion.core.speech import SpeechOutput
 from aion.core.state import StateMachine
 from aion.models import Progress
 from aion.tts.base import Audio, TtsEngine
 from aion.tts.textnorm import normalize_for_speech
 
+ONLINE_RETRY_S = 60.0  # after a failure an online voice is not tried again this long
 OFFLINE_VOICES = {"female": "ru_RU-irina-medium", "male": "ru_RU-denis-medium"}
 
 
@@ -78,6 +81,8 @@ class VoiceOutput(SpeechOutput):
         self._synth_lock = asyncio.Lock()
         # engines that failed to load (e.g. Silero without torch): speak with Piper instead
         self._unavailable: set[str] = set()
+        # no internet: every phrase would wait for the online voice to fail first
+        self._online_retry_at = 0.0
         #: The voice failed to start: replies are shown as text only (no download retries).
         self.silent = False
 
@@ -133,6 +138,8 @@ class VoiceOutput(SpeechOutput):
             if self.voice.engine in self._unavailable:
                 return await self._render_offline(text)
             engine = self.engine()
+            if not engine.offline and time.monotonic() < self._online_retry_at:
+                return await self._render_offline(text)
             try:
                 return await render_voice(engine, text, self.voice)
             except Exception as e:
@@ -140,7 +147,11 @@ class VoiceOutput(SpeechOutput):
                     logger.exception("Ошибка синтеза речи ({})", self.voice.engine)
                     raise
                 # online voice unavailable (no internet?): keep talking with an offline one
-                logger.warning("{} недоступен ({}), говорю офлайн-голосом", self.voice.engine, e)
+                # and do not make the following phrases wait for the same failure
+                self._online_retry_at = time.monotonic() + ONLINE_RETRY_S
+                logger.warning(
+                    "{} недоступен ({}), говорю офлайн-голосом", self.voice.engine, user_message(e)
+                )
                 return await self._render_offline(text)
 
     async def _render_offline(self, text: str) -> Audio:

@@ -1,6 +1,6 @@
 [project]
 name = "aion"
-version = "0.2.6"
+version = "0.3.0"
 description = "Offline-first desktop voice assistant in the spirit of J.A.R.V.I.S. with a plugin system"
 readme = "README.md"
 license = "MIT"
@@ -28,6 +28,7 @@ dependencies = [
     "pynput>=1.8.2",
     "pystray>=0.19.5",
     "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.32",
     "pywebview>=6.2.1",
     "pyyaml>=6.0.3",
     "rapidfuzz>=3.14.6",

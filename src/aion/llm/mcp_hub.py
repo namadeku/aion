@@ -15,7 +15,7 @@ import asyncio
 import contextlib
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 RETRY_S = 30.0
 CALL_TIMEOUT_S = 60.0
 MAX_RESULT_CHARS = 4000  # a tool result goes back into the model's small context
+LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
 _UNSAFE = re.compile(r"[^a-zA-Z0-9_-]")
 
 
@@ -212,11 +213,21 @@ class McpHub:
             if not cursor:
                 break
         wanted = set(config.tools)
-        return [
-            self._spec(connection, tool, config)
-            for tool in tools
-            if not wanted or tool.name in wanted
-        ]
+        specs: list[ToolSpec] = []
+        taken: set[str] = set()
+        for tool in tools:
+            if wanted and tool.name not in wanted:
+                continue
+            spec = self._spec(connection, tool, config)
+            # Names are cut to 64 characters for the providers: two long names could end up
+            # equal, and the second tool would silently replace the first.
+            base, n = spec.name, 1
+            while spec.qualified_name in taken:
+                n += 1
+                spec = replace(spec, name=f"{base[: 60 - len(spec.plugin)]}_{n}")
+            taken.add(spec.qualified_name)
+            specs.append(spec)
+        return specs
 
     def _spec(self, connection: Connection, tool: Tool, config: McpServerConfig) -> ToolSpec:
         async def call(**arguments: Any) -> str:
@@ -237,7 +248,20 @@ class McpHub:
 
 def _target(config: McpServerConfig) -> Any:
     if config.url:
+        host = httpx_host(config.url)
+        if config.url.lower().startswith("http://") and host not in LOOPBACK:
+            logger.warning(
+                "MCP: {} без шифрования — всё, что видит сервер, идёт по сети открытым текстом",
+                config.url,
+            )
         return config.url
     from mcp import StdioServerParameters
 
     return StdioServerParameters(command=config.command, args=config.args, env=config.env or None)
+
+
+def httpx_host(url: str) -> str:
+    """The host of ``url`` (lower case, without port or brackets)."""
+    from urllib.parse import urlsplit
+
+    return (urlsplit(url).hostname or "").lower()

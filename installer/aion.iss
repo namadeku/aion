@@ -25,6 +25,10 @@
 #ifndef ModelIncludes
   #define ModelIncludes "..\build"
 #endif
+#ifndef AppMutexName
+  ; the mutex held by a running Aion (aion.ui.desktop.INSTANCE_MUTEX); overridden only in tests
+  #define AppMutexName "AionAppMutex"
+#endif
 #define ModelsDir "{localappdata}\Aion\models"
 
 [Setup]
@@ -36,7 +40,14 @@ AppPublisher=namadeku
 AppPublisherURL=https://github.com/namadeku/aion
 AppSupportURL=https://github.com/namadeku/aion/issues
 AppUpdatesURL=https://github.com/namadeku/aion/releases
+AppCopyright=MIT License; bundles piper-tts (GPL-3.0)
 VersionInfoVersion={#AppVersion}
+VersionInfoCompany=namadeku
+VersionInfoDescription=Aion voice assistant setup
+VersionInfoProductName=Aion
+VersionInfoProductVersion={#AppVersion}
+; one installer at a time (an update started while the wizard is open, double click)
+SetupMutex=AionSetupMutex
 DefaultDirName={autopf}\Aion
 DefaultGroupName=Aion
 DisableProgramGroupPage=yes
@@ -114,7 +125,7 @@ Type: filesandordirs; Name: "{app}"
 
 [Code]
 const
-  AppMutex = 'AionAppMutex';
+  AppMutex = '{#AppMutexName}';
   RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
   WebView2Key = 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}';
   WebView2Url = 'https://go.microsoft.com/fwlink/p/?LinkId=2124703';

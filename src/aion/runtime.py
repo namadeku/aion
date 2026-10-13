@@ -17,6 +17,7 @@ from rich.console import Console
 
 from aion.app import Aion, console_speech
 from aion.config import Config, ConfigStore
+from aion.core.errors import user_message
 from aion.core.events import AssistantReply, SpeechRecognized
 from aion.models import Progress
 
@@ -80,6 +81,9 @@ async def serve(  # noqa: PLR0915 - startup orchestration
     session.loop.set_exception_handler(_quiet_connection_resets)
     session.stop = asyncio.Event()
     progress = _startup_progress(progress, session)
+    # The web server is ~0.3 s of imports. Do them in a worker thread while the database
+    # opens and the plugins load (which mostly wait for I/O).
+    prefetch = asyncio.ensure_future(asyncio.to_thread(_prefetch_imports, ui=options.ui))
 
     if options.voice:
         from aion.voice import voice_output_factory
@@ -87,7 +91,7 @@ async def serve(  # noqa: PLR0915 - startup orchestration
         speech = voice_output_factory(store, progress)
     else:
         speech = console_speech
-    aion = Aion(store, speech=speech)
+    aion = Aion(store, speech=speech, defer_slow_plugins=True)
     aion.progress = progress
     session.aion = aion
 
@@ -104,6 +108,7 @@ async def serve(  # noqa: PLR0915 - startup orchestration
     hotkey: Hotkey | None = None
     server = None
     async with aion:
+        await prefetch  # the imports below then cost nothing
         try:
             if options.ui:
                 from aion.ui.server import UiServer
@@ -142,6 +147,13 @@ async def serve(  # noqa: PLR0915 - startup orchestration
             await server.stop()
 
 
+def _prefetch_imports(*, ui: bool) -> None:
+    """Import the web server in a worker thread (a failure shows up at the real import)."""
+    if ui:
+        with contextlib.suppress(Exception):
+            import aion.ui.server  # noqa: F401
+
+
 def greeting(config: Config, now: datetime | None = None) -> str:
     """A varied, time-of-day aware greeting."""
     hour = (now or datetime.now()).hour
@@ -169,6 +181,8 @@ async def _start_voice(aion: Aion, server: UiServer | None, progress: Progress) 
     """Load the voice models (downloads them on the first run) and start listening.
 
     With the UI a failure is shown on the page and Aion keeps working in text mode.
+    (Loading the speech engine and the recognizer side by side was measured: no gain on a CPU
+    setup, they fight for the same cores, so they stay sequential.)
     """
     from aion.tts.output import VoiceOutput
     from aion.voice import create_pipeline
@@ -192,7 +206,7 @@ async def _start_voice(aion: Aion, server: UiServer | None, progress: Progress) 
         logger.exception("Голос не запустился, работаю в текстовом режиме")
         if isinstance(aion.speech, VoiceOutput):
             aion.speech.silent = True
-        server.set_startup("failed", f"{type(e).__name__}: {e}")
+        server.set_startup("failed", user_message(e))
         return False
     if server is not None:
         server.set_startup("ready")

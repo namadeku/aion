@@ -334,23 +334,34 @@ def plugin_new(
 def plugin_install(
     source: Annotated[str, typer.Argument(help="Папка, .zip (файл или URL) или git-URL")],
     force: Annotated[bool, typer.Option("--force", help="Заменить установленный")] = False,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Не спрашивать подтверждение")] = False,
     config: ConfigOption = None,
 ) -> None:
     """Установить плагин и его зависимости."""
     from aion.plugins.installer import InstallError, install_dependencies, install_plugin
-    from aion.plugins.manifest import ManifestError
+    from aion.plugins.manifest import ManifestError, PluginManifest
 
     store = _quiet_store(config)
     paths = store.config.paths
 
-    async def run() -> None:
-        manifest = await install_plugin(source, paths.plugins, force=force)
+    async def approve(manifest: PluginManifest) -> bool:
+        """Show what the plugin asks for before anything is copied."""
+        console.print(f"[bold]{manifest.display_name} {manifest.version}[/] {manifest.author}")
+        console.print(f"Права: {', '.join(manifest.permissions) or 'не запрашивает'}")
+        if manifest.dependencies:
+            console.print(f"Зависимости (pip): {', '.join(manifest.dependencies)}")
         if manifest.dangerous_permissions:
             console.print(
-                f"[yellow]Внимание: плагин запрашивает права {manifest.dangerous_permissions}. "
+                f"[yellow]Внимание: права {manifest.dangerous_permissions} опасны. "
                 "Плагины выполняются с полными правами пользователя — ставьте только из "
                 "доверенных источников.[/]"
             )
+        if yes:
+            return True
+        return typer.confirm("Установить?", default=not manifest.dangerous_permissions)
+
+    async def run() -> None:
+        manifest = await install_plugin(source, paths.plugins, force=force, confirm=approve)
         if manifest.dependencies:
             console.print(f"Ставлю зависимости: {', '.join(manifest.dependencies)}…")
             await install_dependencies(manifest, paths.plugin_deps / manifest.name)
@@ -427,5 +438,15 @@ def main() -> None:
     try:
         app()
     except Exception as e:
-        report_fatal(f"{type(e).__name__}: {e}", traceback.format_exc())
-        raise
+        from aion.core.errors import user_message
+
+        message = user_message(e)
+        # the traceback goes to crash.log (and the message box without a console), the user
+        # gets a sentence; AION_DEBUG=1 restores the raw traceback for development
+        crash_log = report_fatal(message, traceback.format_exc())
+        if os.environ.get("AION_DEBUG"):
+            raise
+        console.print(f"[red]{message}[/]")
+        if crash_log is not None:
+            console.print(f"[dim]Подробности: {crash_log}[/]")
+        sys.exit(1)

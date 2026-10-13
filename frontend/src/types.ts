@@ -9,8 +9,12 @@ export interface HistoryEntry {
 }
 
 export interface AvatarConfig {
-  kind: "hud" | "vrm" | "live2d";
+  kind: "hud" | "orb" | "vrm" | "live2d";
   path: string | null;
+  /** Action → .vrma file next to the model, or "procedural" (see avatar/actions.ts). */
+  animations?: Record<string, string>;
+  /** VRM Animation clips found next to the model (snapshot, GET /api/avatar/clips). */
+  clips?: string[];
 }
 
 export interface VoiceConfig {
@@ -45,14 +49,33 @@ export interface Config {
     output_device: string | number | null;
     vad: { backend: string; threshold: number; min_silence_ms: number; max_utterance_s: number };
     barge_in: string;
+    normalize: boolean;
+    denoise: boolean;
+    speculative_ms: number;
+    echo_holdoff_s: number;
   };
   wakeword: {
     backend: string;
     sensitivity: number;
     prefix_seconds: number;
     openwakeword_model: string;
+    tail_name: boolean;
   };
-  stt: { backend: string; whisper_model: string; device: string; vosk_model: string };
+  stt: {
+    backend: string;
+    whisper_model: string;
+    device: string;
+    compute_type: string;
+    beam_size: number;
+    cpu_threads: number;
+    vosk_model: string;
+  };
+  commands: {
+    enabled: boolean;
+    require_wake_name: boolean;
+    confirm_timeout: number;
+    shell_timeout: number;
+  };
   updates: { auto_check: boolean };
   llm: {
     provider: string;
@@ -210,4 +233,87 @@ export interface CudaStatus {
 export interface BusEvent {
   type: string;
   [key: string]: unknown;
+}
+
+// -- user commands (docs/commands-api.md) ---------------------------------------------------
+
+export type CommandLang = "ru" | "en" | "both";
+
+export interface CommandSummary {
+  id: string;
+  folder: string;
+  name: string;
+  triggers: string[];
+  enabled: boolean;
+  dangerous: boolean;
+  lang: CommandLang;
+  description: string;
+  error: string | null;
+}
+
+export interface CommandFolder {
+  path: string;
+  enabled: boolean;
+}
+
+export interface CommandListing {
+  commands: CommandSummary[];
+  folders: CommandFolder[];
+}
+
+/** One step of a command: `type` plus the fields of that type (see command-actions.ts). */
+export type CommandAction = { type: string } & Record<string, unknown>;
+
+export interface CommandDetail {
+  id: string;
+  folder: string;
+  name?: string;
+  triggers?: string[];
+  lang?: CommandLang;
+  enabled?: boolean;
+  confirm?: "auto" | "always" | "never";
+  description?: string;
+  actions?: CommandAction[];
+  dangerous?: boolean;
+  error: string | null;
+  /** Text of a broken file. */
+  raw?: string;
+}
+
+export interface CommandPack {
+  name: string;
+  title: string;
+  description: string;
+  lang: CommandLang;
+  selected_lang: CommandLang;
+  builtin: boolean;
+  installed: boolean;
+  enabled: boolean;
+  commands: number;
+}
+
+export interface VoicePreset {
+  id: string;
+  title: string;
+  description: string;
+  engine: string;
+  voice: string;
+  rate: number;
+  pitch: number;
+  effect: string;
+  license: string;
+  non_commercial: boolean;
+  online: boolean;
+  patch: Record<string, unknown>;
+  current: boolean;
+  installed: boolean | null;
+}
+
+export interface HistoryHit {
+  kind: "message" | "episode";
+  role: string;
+  text: string;
+  source: string;
+  ts: number;
+  ended?: number;
 }

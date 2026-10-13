@@ -9,6 +9,8 @@ export const TOKEN = "e2e-token";
 
 export default defineConfig({
   testDir: "tests/e2e",
+  // one backend with one dialog: tests that run commands must not interrupt each other
+  workers: 1,
   use: { baseURL: `http://127.0.0.1:${PORT}` },
   projects: [
     { name: "desktop", use: { ...devices["Desktop Chrome"] } },

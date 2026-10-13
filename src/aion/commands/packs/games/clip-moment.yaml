@@ -1,0 +1,7 @@
+name: Записать момент
+triggers:
+  - запиши (момент|последние секунды)
+  - clip that
+lang: both
+actions:
+  - {type: keys, combo: "win+alt+g"}

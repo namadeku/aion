@@ -2,50 +2,29 @@ import "@fontsource/exo-2/latin-500.css";
 import "@fontsource/exo-2/cyrillic-500.css";
 import "@fontsource/exo-2/latin-600.css";
 import "@fontsource/exo-2/cyrillic-600.css";
-import "@fontsource/exo-2/latin-700.css";
-import "@fontsource/exo-2/cyrillic-700.css";
 import "@fontsource/inter/latin-400.css";
 import "@fontsource/inter/cyrillic-400.css";
 import "@fontsource/inter/latin-500.css";
 import "@fontsource/inter/cyrillic-500.css";
+import "@fontsource/inter/latin-600.css";
+import "@fontsource/inter/cyrillic-600.css";
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/cyrillic-400.css";
+import "./tokens.css";
 import "./style.css";
+import "./pages.css";
 
 import { debugMode, desktopMode, token } from "./api";
-import { h, icons, svgIcon, toast } from "./dom";
+import { logoMark } from "./brand";
+import { sharedWorkLog } from "./components/worklog-shared";
+import { h, iconButton, icons, svgIcon, toast } from "./dom";
+import { native, type ResizeEdge } from "./native";
+import "./pages/index";
+import { applyTheme, getTheme, toggleTheme } from "./prefs";
+import { currentPath, resolve, sectionPages, sections, type PageRoute } from "./routes";
 import { store } from "./store";
-import { homePage } from "./pages/home";
-import { pluginsPage } from "./pages/plugins";
-import { voicePage } from "./pages/voice";
-import { audioPage } from "./pages/audio";
-import { llmPage } from "./pages/llm";
-import { logsPage } from "./pages/logs";
-import { aboutPage } from "./pages/about";
 
-/** A page renders into a container and returns a cleanup function. */
-export type Page = (root: HTMLElement) => (() => void) | void;
-
-interface Route {
-  path: string;
-  title: string;
-  icon: string;
-  page: Page;
-  /** Only in the dev edition (the public build has no log viewer). */
-  devOnly?: boolean;
-}
-
-const routes: Route[] = [
-  { path: "", title: "Главная", icon: icons.home, page: homePage },
-  { path: "plugins", title: "Плагины", icon: icons.plugins, page: pluginsPage },
-  { path: "voice", title: "Голос и персонаж", icon: icons.voice, page: voicePage },
-  { path: "audio", title: "Микрофон", icon: icons.mic, page: audioPage },
-  { path: "llm", title: "LLM", icon: icons.brain, page: llmPage },
-  { path: "logs", title: "Логи", icon: icons.logs, page: logsPage, devOnly: true },
-  { path: "about", title: "О программе", icon: icons.info, page: aboutPage },
-];
-
-const visibleRoutes = (): Route[] => routes.filter((r) => !r.devOnly || store.edition === "dev");
+applyTheme();
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -59,63 +38,203 @@ if (desktopMode) {
 }
 
 function startApp(): void {
-  const nav = h("nav", { class: "nav" });
-  const footer = h("div", { class: "rail-footer" });
-  const main = h("main", { class: "main" });
-  app.append(
-    h(
-      "div",
-      { class: "shell" },
-      h(
-        "aside",
-        { class: "rail" },
-        h("div", { class: "brand" }, "Aion", h("small", null, "voice assistant")),
-        nav,
-        footer,
-      ),
-      main,
+  // -- rail -------------------------------------------------------------------------------
+  const nav = h("nav", { class: "rail-nav", "aria-label": "Разделы" });
+  const profileInitial = h("span", { class: "profile-initial", "aria-hidden": "true" });
+  const connection = h("span", { class: "sr-only", role: "status" });
+  const profile = h(
+    "a",
+    { class: "rail-item profile", href: "#/settings/voice" },
+    profileInitial,
+    h("i", { class: "conn-dot", "aria-hidden": "true" }),
+  );
+  const rail = h(
+    "aside",
+    { class: "rail" },
+    h("a", { class: "rail-logo", href: "#/", "aria-label": "Aion — главная" }, logoMark(30)),
+    nav,
+    h("div", { class: "rail-bottom" }, profile, connection),
+  );
+
+  // -- title bar --------------------------------------------------------------------------
+  const themeBtn = iconButton("Тема", icons.sun, () => {
+    toggleTheme();
+    renderChrome();
+  });
+  const windowButtons = h(
+    "div",
+    { class: "window-buttons" },
+    iconButton("Свернуть", icons.minimize, () => native.minimize()),
+    iconButton("Развернуть", icons.maximize, () => native.toggleMaximize()),
+    iconButton("Закрыть", icons.close, () => native.close(), "icon-btn close"),
+  );
+  const notice = h("div", { class: "titlebar-notice" });
+  const titlebar = h(
+    "header",
+    { class: "titlebar" },
+    h("div", { class: "wordmark", "aria-label": "Aion" }, "AION"),
+    notice,
+    h("div", { class: "titlebar-controls" }, themeBtn, windowButtons),
+  );
+  // the frameless window moves by its title bar; a double click maximizes
+  const onControl = (e: MouseEvent): boolean =>
+    Boolean((e.target as HTMLElement).closest("button, a, input, select, textarea"));
+  titlebar.addEventListener("mousedown", (e) => {
+    if (!native.available || e.button !== 0 || onControl(e)) return;
+    e.preventDefault(); // no text selection while dragging
+    native.startDrag();
+  });
+  titlebar.addEventListener("dblclick", (e) => {
+    if (native.available && !onControl(e)) native.toggleMaximize();
+  });
+
+  // -- resize edges (frameless window) ----------------------------------------------------
+  const EDGES: ResizeEdge[] = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+  const edges = h(
+    "div",
+    { class: "resize-edges", "aria-hidden": "true" },
+    ...EDGES.map((edge) =>
+      h("div", {
+        class: `edge edge-${edge}`,
+        onmousedown: (e: MouseEvent) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          native.startResize(edge);
+        },
+      }),
     ),
   );
 
+  const main = h("main", { class: "main", id: "main" });
+  const frame = h("div", { class: "frame" }, titlebar, main);
+  const shell = h(
+    "div",
+    { class: "shell" },
+    h("a", { class: "skip-link", href: "#main" }, "К содержимому"),
+    rail,
+    frame,
+    edges,
+  );
+  app.append(shell);
+
+  // -- routing ----------------------------------------------------------------------------
   let cleanup: (() => void) | void;
   let renderedEdition = store.edition;
+  let current: PageRoute | null = null;
 
   function render(): void {
-    const path = location.hash.replace(/^#\/?/, "");
-    const shown = visibleRoutes();
-    const route = shown.find((r) => r.path === path) ?? shown[0];
+    const path = currentPath();
+    const route = resolve(path);
     renderedEdition = store.edition;
+    current = route;
     nav.replaceChildren(
-      ...shown.map((r) =>
-        h(
-          "a",
-          { href: `#/${r.path}`, class: r === route ? "active" : "", title: r.title },
-          svgIcon(r.icon),
-          h("span", null, r.title),
-        ),
-      ),
+      ...sections
+        .filter((s) => sectionPages(s.id).length)
+        .map((s) => {
+          const target = sectionPages(s.id)[0];
+          const active = route.section === s.id;
+          return h(
+            "a",
+            {
+              href: `#/${target.path}`,
+              class: `rail-item${active ? " active" : ""}`,
+              "aria-label": s.title,
+              "aria-current": active ? "page" : undefined,
+              "data-tip": s.title,
+            },
+            svgIcon(s.icon),
+          );
+        }),
     );
+
     cleanup?.();
     main.replaceChildren();
     main.scrollTop = 0;
-    cleanup = route.page(main);
+    shell.dataset.bleed = String(Boolean(route.fullBleed));
+    shell.dataset.section = route.section;
+    let container: HTMLElement = main;
+    const siblings = sectionPages(route.section);
+    if (!route.fullBleed) {
+      container = h("div", { class: "page-wrap" });
+      if (siblings.length > 1) {
+        const section = sections.find((s) => s.id === route.section);
+        main.append(
+          h(
+            "nav",
+            { class: "subnav", "aria-label": section?.title ?? "Подразделы" },
+            ...siblings.map((p) =>
+              h(
+                "a",
+                {
+                  href: `#/${p.path}`,
+                  class: p === route ? "active" : "",
+                  "aria-current": p === route ? "page" : undefined,
+                },
+                p.title,
+              ),
+            ),
+          ),
+        );
+      }
+      main.append(container);
+    }
+    cleanup = route.page(container);
     document.title = route.path ? `${route.title} — ${store.name}` : store.name;
   }
 
-  function renderFooter(): void {
-    // before the first snapshot the page is still connecting, not disconnected
-    const connection = h(
-      "div",
-      { style: store.connected || !store.loaded ? "" : "color:var(--amber)" },
-      store.connected ? "● соединение есть" : store.loaded ? "○ нет соединения…" : "○ подключение…",
-    );
-    const update = store.update
-      ? h("a", { href: "#/about", class: "update-link" }, `↑ обновление ${store.update}`)
-      : null;
-    footer.replaceChildren(connection, ...(update ? [update] : []));
+  function renderChrome(): void {
+    const theme = getTheme();
+    const label = theme === "dark" ? "Светлая тема" : "Тёмная тема";
+    themeBtn.replaceChildren(svgIcon(theme === "dark" ? icons.sun : icons.moon));
+    themeBtn.setAttribute("aria-label", label);
+    themeBtn.title = label;
+
+    windowButtons.hidden = !native.available;
+    edges.hidden = !native.available || native.state === "maximized";
+    shell.dataset.native = String(native.available);
+    const maxBtn = windowButtons.children[1] as HTMLButtonElement;
+    const maxLabel = native.state === "maximized" ? "Восстановить" : "Развернуть";
+    maxBtn.setAttribute("aria-label", maxLabel);
+    maxBtn.title = maxLabel;
   }
 
-  const startup = h("div", { class: "startup", hidden: true });
+  function renderStatus(): void {
+    // before the first snapshot the page is still connecting, not disconnected
+    const state = store.connected ? "ok" : store.loaded ? "lost" : "connecting";
+    connection.textContent =
+      state === "ok" ? "соединение есть" : state === "lost" ? "нет соединения…" : "подключение…";
+    profile.dataset.conn = state;
+    profileInitial.textContent = (store.name || "A").slice(0, 1).toUpperCase();
+    const label = `Профиль: ${store.name}. ${connection.textContent}`;
+    profile.setAttribute("aria-label", label);
+    profile.dataset.tip = `${store.name} · ${connection.textContent}`;
+
+    const items: HTMLElement[] = [];
+    if (!token) {
+      items.push(
+        h(
+          "span",
+          { class: "notice warn" },
+          "Откройте интерфейс из окна Aion или по ссылке из консоли (с токеном).",
+        ),
+      );
+    }
+    if (state === "lost")
+      items.push(h("span", { class: "notice warn" }, "Нет связи с ядром — переподключаюсь…"));
+    if (store.update) {
+      items.push(
+        h(
+          "a",
+          { class: "notice accent", href: "#/settings/about" },
+          `Доступна версия ${store.update}`,
+        ),
+      );
+    }
+    notice.replaceChildren(...items);
+    if (current?.path === "") document.title = store.name;
+  }
+
+  const startup = h("div", { class: "startup", hidden: true, role: "status" });
   app.append(startup);
   let dismissedError: string | null = null;
 
@@ -132,7 +251,7 @@ function startApp(): void {
         renderStartup();
       };
       startup.replaceChildren(
-        h("button", { class: "startup-close", title: "Скрыть", onClick: close }, "×"),
+        iconButton("Скрыть", icons.close, close, "icon-btn startup-close"),
         h("b", null, "Голос не запустился"),
         h("p", null, "Пока можно писать текстом. Причина:"),
         h("code", null, s.error ?? ""),
@@ -178,8 +297,9 @@ function startApp(): void {
   }
 
   window.addEventListener("hashchange", render);
-  store.subscribe(renderFooter);
+  store.subscribe(renderStatus);
   store.subscribe(renderStartup);
+  native.subscribe(renderChrome);
   // the first snapshot tells the edition: show or hide dev-only pages
   store.subscribe(() => {
     if (store.edition !== renderedEdition) render();
@@ -189,22 +309,10 @@ function startApp(): void {
     if (e.status === "error") toast(`Плагин ${e.plugin}`, String(e.error ?? "ошибка"), "error");
   });
 
-  if (!token) {
-    main.append(
-      h(
-        "div",
-        { class: "page" },
-        h(
-          "div",
-          { class: "banner" },
-          "Откройте интерфейс из окна Aion или по ссылке из консоли (с токеном).",
-        ),
-      ),
-    );
-  }
-
+  sharedWorkLog(); // listen to runs from the start, whatever page is open
   render();
-  renderFooter();
+  renderChrome();
+  renderStatus();
   store.connect();
   if (debugMode) (window as unknown as { aion: unknown }).aion = { store };
 }

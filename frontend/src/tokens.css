@@ -1,0 +1,138 @@
+/*
+ * Aion design tokens: the single source of colour, type, spacing, radii, shadows and motion.
+ * Components use the semantic roles (--surface, --text-dim, --accent…), never raw values.
+ * Themes switch by setting data-theme="dark" | "light" on <html> (see theme.ts).
+ */
+
+:root {
+  /* ---- type ---- */
+  --font-display: "Exo 2", "Segoe UI", sans-serif;
+  --font-body: "Inter", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", Consolas, monospace;
+
+  /* modular scale, ratio ~1.2 around a 14px UI base */
+  --text-xs: 11px;
+  --text-sm: 12.5px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: clamp(22px, 1.6vw + 12px, 28px);
+  --wordmark: clamp(22px, 1.4vw + 14px, 30px);
+  --wordmark-tracking: 0.36em;
+
+  /* ---- spacing (4-based) ---- */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
+  /* ---- layout ---- */
+  --rail-w: 68px;
+  --titlebar-h: 72px;
+  --orb-w: clamp(280px, 30vw, 460px);
+  --chat-max: 760px;
+  --hit: 40px; /* icon buttons; the composer's main buttons are 44px */
+
+  /* ---- radii: larger for containers, smaller for controls ---- */
+  --r-window: 14px;
+  --r-panel: 14px;
+  --r-bubble: 16px;
+  --r-control: 10px;
+  --r-small: 6px;
+  --r-pill: 999px;
+
+  /* ---- motion ---- */
+  --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 360ms;
+}
+
+/* ---- dark: graphite, the default ---- */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --window: #16181b;
+  --surface: #1c1f23;
+  --raised: #24282d;
+  --bubble: #2b3036;
+  --field: #131518;
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --text: #e7e9ec;
+  --text-dim: #9ba2ab;
+  --text-faint: #80878f;
+  --hover: rgba(255, 255, 255, 0.05);
+  --pressed: rgba(255, 255, 255, 0.09);
+
+  --accent: #38bdf0;
+  --accent-ink: #04121a; /* text/icons on an accent fill */
+  --accent-text: #5ccaf3; /* accent used as text on surfaces */
+  --accent-soft: rgba(56, 189, 240, 0.12);
+  --accent-line: rgba(56, 189, 240, 0.42);
+  --focus: #7dd6f7;
+
+  --ok: #4fd69c;
+  --warn: #f0b44c;
+  --danger: #f26b6b;
+  --danger-soft: rgba(242, 107, 107, 0.1);
+  --warn-soft: rgba(240, 180, 76, 0.1);
+
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+
+  /* orb avatar (read by avatar/orb.ts) */
+  --orb-idle: #38bdf0;
+  --orb-listening: #5fe3d0;
+  --orb-thinking: #8fb4ff;
+  --orb-speaking: #4cc9ff;
+}
+
+/* ---- light: cool paper ---- */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --window: #edeff1;
+  --surface: #f6f7f8;
+  --raised: #ffffff;
+  --bubble: #e2e6ea;
+  --field: #ffffff;
+  --line: rgba(20, 28, 38, 0.09);
+  --line-strong: rgba(20, 28, 38, 0.18);
+  --text: #15181c;
+  --text-dim: #535b65;
+  --text-faint: #646c76;
+  --hover: rgba(20, 28, 38, 0.05);
+  --pressed: rgba(20, 28, 38, 0.09);
+
+  --accent: #0b78a8;
+  --accent-ink: #ffffff;
+  --accent-text: #0b6d99;
+  --accent-soft: rgba(11, 120, 168, 0.1);
+  --accent-line: rgba(11, 120, 168, 0.4);
+  --focus: #0b78a8;
+
+  --ok: #17845a;
+  --warn: #9a6400;
+  --danger: #c43c3c;
+  --danger-soft: rgba(196, 60, 60, 0.08);
+  --warn-soft: rgba(154, 100, 0, 0.08);
+
+  --shadow-pop: 0 12px 32px rgba(20, 28, 38, 0.14), 0 2px 6px rgba(20, 28, 38, 0.08);
+  --shadow-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+
+  --orb-idle: #0b78a8;
+  --orb-listening: #0e8f80;
+  --orb-thinking: #3c5fc4;
+  --orb-speaking: #0a86c2;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 0ms;
+    --dur: 0ms;
+    --dur-slow: 0ms;
+  }
+}

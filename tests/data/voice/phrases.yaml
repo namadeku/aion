@@ -1,0 +1,77 @@
+# Phrase set for scripts/bench_stt.py. Audio is synthesized locally with Piper (not committed).
+#
+# Per case:
+#   say      - text given to Piper (what the "speaker" pronounces; the name is spelled as heard)
+#   ref      - expected transcript WITHOUT the assistant name (numbers may be words or digits)
+#   command  - "plugin.command" the router must pick (commands only)
+#   kind     - command   : addressed to the assistant, must wake and route
+#              name_only : just the name, must wake, no command text
+#              chatter   : room talk without the name, must be ignored
+#              distractor: talk with words close to the name, must be ignored
+#   variants - overrides the per-kind default list below
+# echo_only cases simulate the assistant's own voice reaching the microphone while it speaks.
+
+sample_rate: 16000
+voices:
+  - ru_RU-denis-medium
+  - ru_RU-irina-medium
+
+variants:
+  clean: {}
+  noise: {snr_db: 8}
+  echo: {echo_db: -9}      # assistant still speaking (other voice) at -9 dB under the user
+  fast: {rate: 1.5}
+  quiet: {peak: 0.02}
+
+defaults:
+  command: [clean, noise, echo, fast, quiet]
+  name_only: [clean, noise]
+  chatter: [clean, noise]
+  distractor: [clean]
+
+cases:
+  - {id: time, kind: command, say: "Аион, который час", ref: "который час", command: clock.time}
+  - {id: weather, kind: command, say: "Айон, какая погода в Москве", ref: "какая погода в москве", command: weather.in_city}
+  - {id: timer, kind: command, say: "Эйон, поставь таймер на десять минут", ref: "поставь таймер на 10 минут", command: timers.timer}
+  - {id: louder, kind: command, say: "Аион, сделай погромче", ref: "сделай погромче", command: system.louder}
+  - {id: unmute, kind: command, say: "Аион, включи звук", ref: "включи звук", command: system.unmute}
+  - {id: calc, kind: command, say: "Аэон, сколько будет двадцать пять плюс семнадцать", ref: "сколько будет 25 плюс 17", command: calc.calculate_cmd}
+  - {id: minimize, kind: command, say: "Аион, сверни все окна", ref: "сверни все окна", command: apps.minimize_all_cmd}
+  - {id: screenshot, kind: command, say: "Слушай, Аион, сделай скриншот", ref: "сделай скриншот", command: system.screenshot}
+  - {id: weekday, kind: command, say: "Аион, какой сегодня день недели", ref: "какой сегодня день недели", command: clock.weekday}
+  - {id: volume, kind: command, say: "Аион, убавь громкость на двадцать", ref: "убавь громкость на 20", command: system.quieter_by}
+  - {id: remind, kind: command, say: "Аион, напомни мне позвонить маме через час", ref: "напомни мне позвонить маме через час", command: timers.remind}
+  - {id: name_a, kind: name_only, say: "Аион", ref: ""}
+  - {id: name_b, kind: name_only, say: "Айон", ref: "", voice: ru_RU-irina-medium}
+
+  - {id: chat_weather, kind: chatter, say: "Сегодня хорошая погода, пойдём после работы гулять в парк", ref: "сегодня хорошая погода пойдем после работы гулять в парк"}
+  - {id: chat_pizza, kind: chatter, say: "Давай закажем пиццу на вечер и посмотрим фильм", ref: "давай закажем пиццу на вечер и посмотрим фильм"}
+  - {id: chat_time, kind: chatter, say: "Который час, мне кажется, мы уже опаздываем", ref: "который час мне кажется мы уже опаздываем"}
+  - {id: chat_late, kind: chatter, say: "Мне кажется, он опять опоздает на встречу", ref: "мне кажется он опять опоздает на встречу"}
+  - {id: chat_space, kind: chatter, say: "Вчера мы смотрели интересный фильм про космос", ref: "вчера мы смотрели интересный фильм про космос"}
+
+  - {id: dis_lyon, kind: distractor, say: "Лион очень красивый город во Франции", ref: "лион очень красивый город во франции"}
+  - {id: dis_they, kind: distractor, say: "Они сказали, что придут завтра", ref: "они сказали что придут завтра"}
+  - {id: dis_ion, kind: distractor, say: "Ион натрия имеет положительный заряд", ref: "ион натрия имеет положительный заряд"}
+  - {id: dis_iron, kind: distractor, say: "Железный человек вышел на экраны в две тысячи восьмом", ref: "железный человек вышел на экраны в 2008"}
+  - {id: dis_he, kind: distractor, say: "Эй, он опять забыл выключить свет", ref: "эй он опять забыл выключить свет"}
+  - {id: dis_anya, kind: distractor, say: "Аня, который час", ref: "аня который час"}
+  - {id: dis_neon, kind: distractor, say: "Неоновая вывеска горела всю ночь", ref: "неоновая вывеска горела всю ночь"}
+  - {id: dis_ayo, kind: distractor, say: "Алло, Иван, ты уже дома", ref: "алло иван ты уже дома"}
+
+# The assistant's own voice (state "speaking"), alone. Must never wake it up.
+echo_only:
+  - {id: echo_time, say: "Сейчас четырнадцать часов тридцать минут. Хотите, чтобы я поставил напоминание?", voice: ru_RU-irina-medium, gain_db: -6}
+  - {id: echo_name, say: "Меня зовут Аион, я ваш персональный ассистент", voice: ru_RU-irina-medium, gain_db: -6}
+  - {id: echo_name_quiet, say: "Конечно, сэр. Аион к вашим услугам", voice: ru_RU-irina-medium, gain_db: -14}
+
+# Phrases the assistant "says" over the user in the echo variant (cycled).
+echo_texts:
+  - "Сейчас за окном плюс восемь градусов, облачно, местами небольшой дождь"
+  - "Конечно, сэр. Я уже занимаюсь этим, это займёт всего несколько секунд"
+
+# Room noise / silence: Whisper must return nothing (hallucination check, STT only).
+silence_clips:
+  - {id: sil_floor, kind: floor}
+  - {id: sil_pink, kind: pink, level_db: -38}
+  - {id: sil_white, kind: white, level_db: -45}

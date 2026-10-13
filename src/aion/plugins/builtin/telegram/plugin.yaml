@@ -1,0 +1,40 @@
+name: telegram
+title: Telegram-бот
+version: 1.0.0
+author: Aion
+description: >-
+  Управление ассистентом из Telegram через ваш собственный бот: текст из разрешённых чатов
+  идёт в диалог, ответы приходят обратно, опасные действия подтверждаются кнопками Да/Нет.
+  Создайте бота у @BotFather, положите токен в AION_TELEGRAM_TOKEN (файл .env в папке данных),
+  напишите боту /start, добавьте показанный chat id в белый список и включите бота.
+permissions: [network]
+enabled_by_default: true
+settings:
+  enabled:
+    type: bool
+    title: Включить бота
+    description: Пока выключено, плагин ничего не делает и в сеть не ходит.
+    default: false
+  token:
+    type: secret
+    title: Токен бота
+    description: Выдаёт @BotFather. Лучше задать переменной окружения AION_TELEGRAM_TOKEN.
+    env: AION_TELEGRAM_TOKEN
+  allowed_chat_ids:
+    type: string
+    title: Разрешённые chat id
+    description: >-
+      Числа через запятую. Пусто — бот никому не отвечает, кроме подсказки с chat id на /start.
+    default: ""
+  rate_limit_per_minute:
+    type: int
+    title: Сообщений в минуту из одного чата
+    default: 20
+    min: 1
+    max: 120
+  max_input_chars:
+    type: int
+    title: Максимальная длина входящего сообщения
+    default: 1000
+    min: 50
+    max: 4000

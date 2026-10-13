@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import re
 import time
+import uuid
 from collections.abc import AsyncGenerator, Callable
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, cast
@@ -17,7 +19,15 @@ from typing import TYPE_CHECKING, Any, cast
 from loguru import logger
 from rapidfuzz import fuzz
 
-from aion.core.events import AssistantReply, SpeechRecognized, ToolCalled
+from aion.core.errors import user_message
+from aion.core.events import (
+    AssistantReply,
+    SpeechRecognized,
+    StepFinished,
+    StepStarted,
+    StepStatus,
+    ToolCalled,
+)
 from aion.llm.base import (
     LlmError,
     LlmProvider,
@@ -55,6 +65,7 @@ _PROMISE = re.compile(
 )
 
 
+STEP_DETAIL_CHARS = 300  # arguments and results shown in the work log are cut to this
 REPEAT_SIMILAR = 88  # a first sentence this close to an earlier one is a repeat
 SIMILAR_QUESTION = 80  # a question this close to an earlier one invites copying its answer
 RECENT_REPLIES = 6  # how many earlier replies a new one is compared with
@@ -93,6 +104,20 @@ VOICE_RULES = (
     "memory__remember_fact и вспоминай потом к месту.\n"
     "Не называй себя языковой моделью или программой без необходимости — ты {name}."
 )
+
+
+def tool_title(spec: ToolSpec | None, call_name: str) -> str:
+    """How a tool call is named in the work log."""
+    if spec is None:
+        return f"Инструмент {call_name}"
+    if spec.plugin.startswith("mcp_"):
+        return f"MCP {spec.plugin.removeprefix('mcp_')}: {spec.name}"
+    return f"Инструмент {spec.plugin}.{spec.name}"
+
+
+def _clip(text: str) -> str:
+    text = " ".join(text.split())
+    return text if len(text) <= STEP_DETAIL_CHARS else text[: STEP_DETAIL_CHARS - 1] + "…"
 
 
 def create_provider(config: Config) -> LlmProvider | None:
@@ -184,6 +209,39 @@ class Brain:
     async def _run_tool(
         self, turn: Turn, spec: ToolSpec | None, call_name: str, args: dict[str, Any]
     ) -> tuple[str, bool]:
+        """Run one tool call, shown as a step of the turn's run in the work log."""
+        if not turn.run_id:  # an unprompted remark: not in the work log
+            return await self._invoke_tool(turn, spec, call_name, args)
+        bus = self.app.bus
+        step_id = uuid.uuid4().hex[:12]
+        status: StepStatus = "cancelled"
+        detail = ""
+        try:  # a stop during the announcement still closes the step
+            await bus.publish(
+                StepStarted(
+                    run_id=turn.run_id,
+                    step_id=step_id,
+                    kind="tool",
+                    title=tool_title(spec, call_name),
+                    detail=_clip(json.dumps(args, ensure_ascii=False)) if args else "",
+                )
+            )
+            result, is_error = await self._invoke_tool(turn, spec, call_name, args)
+            status, detail = ("error" if is_error else "ok"), _clip(result)
+            return result, is_error
+        except Exception as e:
+            status, detail = "error", _clip(user_message(e))
+            raise
+        finally:
+            event = StepFinished(run_id=turn.run_id, step_id=step_id, status=status, detail=detail)
+            if status == "cancelled":
+                bus.emit(event)  # the turn is being cancelled: do not wait here
+            else:
+                await bus.publish(event)
+
+    async def _invoke_tool(
+        self, turn: Turn, spec: ToolSpec | None, call_name: str, args: dict[str, Any]
+    ) -> tuple[str, bool]:
         if spec is None:
             return f"Инструмент {call_name} не найден", True
         await self.app.bus.publish(ToolCalled(plugin=spec.plugin, tool=spec.name, arguments=args))
@@ -218,6 +276,9 @@ class Brain:
         except LlmError as e:
             logger.warning("LLM недоступна: {}", e)
             await self._say_error(str(e))
+        except Exception as e:  # a provider bug or a bad payload must not end up as a traceback
+            logger.exception("Сбой при ответе LLM")
+            await self._say_error(user_message(e))
         finally:
             await dialog.end_reply(" ".join(spoken))
             await dialog.set_emotion("neutral")
@@ -242,6 +303,9 @@ class Brain:
                 )
         except (LlmError, TimeoutError) as e:
             logger.info("LLM не прокомментировала событие: {}", e or "слишком долго")
+            return bool(spoken)
+        except Exception:
+            logger.exception("Сбой при комментарии события")
             return bool(spoken)
         finally:
             await dialog.end_reply(" ".join(spoken))
@@ -440,6 +504,9 @@ class Brain:
             await warm()
         if not getattr(self.provider, "prefix_cache", False):
             return
+        # The prefix cache is keyed by the tool list: wait for plugins that were still loading
+        # in the background, or the first question would read the whole prompt again.
+        await self.app.plugins.wait_loaded()
         started = time.perf_counter()
         tools = self._tools()
         tool_defs = [ToolDef(name, t.description, t.parameters) for name, t in tools.items()]

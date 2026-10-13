@@ -1,0 +1,7 @@
+name: Следующий рабочий стол
+triggers:
+  - следующий рабочий стол
+  - next desktop
+lang: both
+actions:
+  - {type: keys, combo: "win+ctrl+right"}

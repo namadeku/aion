@@ -1,0 +1,7 @@
+name: Discord тише
+triggers:
+  - (сделай|сделать) дискорд тише
+  - discord quieter
+lang: both
+actions:
+  - {type: volume, app: discord, change: -20}

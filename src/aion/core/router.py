@@ -116,10 +116,13 @@ def _compile(command: CommandSpec, source: str) -> _Compiled:
 class Router:
     def __init__(self, fuzzy_threshold: int = 82) -> None:
         self.fuzzy_threshold = fuzzy_threshold
+        self._groups: dict[str, list[_Compiled]] = {}
         self._compiled: list[_Compiled] = []
 
-    def set_commands(self, commands: list[CommandSpec]) -> None:
-        self._compiled = [_compile(c, p) for c in commands for p in c.patterns]
+    def set_commands(self, commands: list[CommandSpec], *, group: str = "plugins") -> None:
+        """Replace the commands of ``group``; other groups (user commands) stay registered."""
+        self._groups[group] = [_compile(c, p) for c in commands for p in c.patterns]
+        self._compiled = [c for compiled in self._groups.values() for c in compiled]
 
     @property
     def commands(self) -> list[CommandSpec]:

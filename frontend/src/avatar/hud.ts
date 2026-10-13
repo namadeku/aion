@@ -1,7 +1,11 @@
-// Holographic J.A.R.V.I.S.-style ring drawn on a 2D canvas. Reacts to voice and state.
+// Holographic ring drawn on a 2D canvas. Reacts to voice and state.
+// As the desktop mascot (`fullBody`) it sits low in a tall frame, bobs and swells with the
+// voice (see voice.ts) and reports where its underside is through `layout()`.
 
 import type { State } from "../types";
-import type { Avatar, AvatarInput } from "./types";
+import type { Avatar, AvatarInput, AvatarOptions, Layout } from "./types";
+import { follow } from "./smooth";
+import { VoiceMotion } from "./voice";
 
 const COLORS: Record<State, [number, number, number]> = {
   idle: [84, 214, 255],
@@ -19,8 +23,15 @@ export class HudAvatar implements Avatar {
   private energy = 0;
   private bars = new Float32Array(BARS);
   private spin = 0;
+  private fullBody: boolean;
+  private voice = new VoiceMotion();
+  private reduced = matchMedia("(prefers-reduced-motion: reduce)");
 
-  constructor(private canvas: HTMLCanvasElement) {
+  constructor(
+    private canvas: HTMLCanvasElement,
+    options: AvatarOptions = {},
+  ) {
+    this.fullBody = options.fullBody ?? false;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("Canvas 2D недоступен");
     this.ctx = ctx;
@@ -37,7 +48,16 @@ export class HudAvatar implements Avatar {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  update({ state, outputLevel, inputLevel, time, dt }: AvatarInput): void {
+  /** Ring radius and centre row for the current canvas, in CSS pixels. */
+  private geometry(w: number, h: number): { R: number; cx: number; cy: number } {
+    if (!this.fullBody) return { R: Math.min(w, h) * 0.3, cx: w / 2, cy: h * 0.47 };
+    const R = Math.min(w * 0.27, h * 0.14);
+    return { R, cx: w / 2, cy: h - R * 1.5 - h * 0.01 };
+  }
+
+  update(input: AvatarInput): void {
+    if (document.hidden) return;
+    const { state, outputLevel, inputLevel, time, dt } = input;
     const { ctx } = this;
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
@@ -45,22 +65,28 @@ export class HudAvatar implements Avatar {
 
     // ease colour and energy towards the current state
     const target = COLORS[state];
-    for (let i = 0; i < 3; i++) this.color[i] += (target[i] - this.color[i]) * Math.min(1, dt * 4);
+    for (let i = 0; i < 3; i++) this.color[i] += (target[i] - this.color[i]) * follow(4, dt);
     const level = state === "speaking" ? outputLevel : state === "listening" ? inputLevel : 0;
-    this.energy += (level - this.energy) * Math.min(1, dt * (level > this.energy ? 18 : 6));
+    this.energy += (level - this.energy) * follow(level > this.energy ? 18 : 6, dt);
     this.spin += dt * (state === "thinking" ? 2.4 : 0.25);
 
     const [r, g, b] = this.color.map(Math.round);
     const rgba = (a: number) => `rgba(${r},${g},${b},${a})`;
-    const cx = w / 2;
-    const cy = h * 0.47;
-    const R = Math.min(w, h) * 0.3;
+    const { R, cx, cy } = this.geometry(w, h);
 
     ctx.clearRect(0, 0, w, h);
+    const pose = this.fullBody ? this.voice.update(input, this.reduced.matches) : null;
+    ctx.save();
+    if (pose) {
+      ctx.translate(cx + pose.sway * h, cy - pose.lift * h);
+      ctx.rotate(pose.roll);
+      ctx.scale(pose.scale, pose.scale);
+      ctx.translate(-cx, -cy);
+    }
 
     // glow
     const glow = ctx.createRadialGradient(cx, cy, R * 0.1, cx, cy, R * 1.6);
-    glow.addColorStop(0, rgba(0.16 + this.energy * 0.25));
+    glow.addColorStop(0, rgba(0.16 + this.energy * 0.25 + (pose?.glow ?? 0) * 0.12));
     glow.addColorStop(1, rgba(0));
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, w, h);
@@ -113,7 +139,7 @@ export class HudAvatar implements Avatar {
     for (let i = 0; i < BARS; i++) {
       const wave = Math.sin(time * 3 + i * 0.45) * 0.5 + Math.sin(time * 5.3 + i * 1.7) * 0.5 + 1;
       const target = this.energy * (0.35 + 0.65 * wave * 0.5) + 0.03;
-      this.bars[i] += (target - this.bars[i]) * Math.min(1, dt * 14);
+      this.bars[i] += (target - this.bars[i]) * follow(14, dt);
       const a = (i / BARS) * Math.PI * 2 - Math.PI / 2;
       const inner = R * 0.74;
       const outer = inner + R * 0.32 * this.bars[i] + 2;
@@ -156,6 +182,22 @@ export class HudAvatar implements Avatar {
     }
     ctx.stroke();
     ctx.restore();
+    ctx.restore(); // the voice-driven body transform
+  }
+
+  /** Underside of the ring on the frame (drawing-buffer pixels): it hovers on that line. */
+  layout(): Layout | null {
+    if (!this.fullBody) return null;
+    const { width, height } = this.canvas;
+    const cssH = this.canvas.clientHeight || height;
+    const { R, cy } = this.geometry(this.canvas.clientWidth || width, cssH);
+    const k = height / cssH;
+    return {
+      feet: Math.min(cy + R * 1.4 + cssH * 0.02, cssH * 0.985) * k,
+      seat: (cy + R * 1.4) * k,
+      center: width / 2,
+      head: (cy - R * 1.4) * k,
+    };
   }
 
   dispose(): void {

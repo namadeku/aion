@@ -1,0 +1,7 @@
+name: Discord громче
+triggers:
+  - (сделай|сделать) дискорд громче
+  - discord louder
+lang: both
+actions:
+  - {type: volume, app: discord, change: 20}

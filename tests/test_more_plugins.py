@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -34,6 +35,14 @@ def test_resolve_known_targets() -> None:
     assert tg is not None
     assert tg.location == "tg.lnk"
     assert resolve("абракадабра", aliases, shortcuts) is None
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="system apps are Windows-only")
+def test_system_app_by_english_name_beats_fuzzy_match() -> None:
+    shortcuts = {"programmer's notepad": Path("pn.lnk")}
+    hit = launcher.resolve("notepad", {}, shortcuts)
+    assert hit is not None
+    assert (hit.kind, hit.location) == ("app", "notepad")
 
 
 def test_translit() -> None:

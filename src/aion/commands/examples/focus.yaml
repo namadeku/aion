@@ -1,0 +1,13 @@
+# Example scenario: a quiet desk for concentrated work.
+name: Режим концентрации
+triggers:
+  - режим концентрации
+  - (мне нужно|хочу) сосредоточиться
+lang: ru
+enabled: true
+confirm: auto
+description: Свернуть все окна и выключить звук
+actions:
+  - {type: minimize_all}
+  - {type: say, text: "Убираю лишнее. Звук выключаю, удачной работы."}
+  - {type: volume, mute: true}

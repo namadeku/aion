@@ -50,7 +50,7 @@ wheels = [
 
 [[package]]
 name = "aion"
-version = "0.2.6"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -71,6 +71,7 @@ dependencies = [
     { name = "pynput" },
     { name = "pystray" },
     { name = "python-dotenv" },
+    { name = "python-multipart" },
     { name = "pywebview" },
     { name = "pyyaml" },
     { name = "rapidfuzz" },
@@ -136,6 +137,7 @@ requires-dist = [
     { name = "pynput", specifier = ">=1.8.2" },
     { name = "pystray", specifier = ">=0.19.5" },
     { name = "python-dotenv", specifier = ">=1.2.4" },
+    { name = "python-multipart", specifier = ">=0.0.32" },
     { name = "pywebview", specifier = ">=6.2.1" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "rapidfuzz", specifier = ">=3.14.6" },

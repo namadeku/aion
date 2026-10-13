@@ -1,0 +1,7 @@
+name: Spotify громче
+triggers:
+  - (сделай|сделать) спотифай громче
+  - spotify louder
+lang: both
+actions:
+  - {type: volume, app: spotify, change: 15}

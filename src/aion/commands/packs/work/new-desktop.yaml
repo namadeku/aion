@@ -1,0 +1,7 @@
+name: Новый рабочий стол
+triggers:
+  - новый рабочий стол
+  - new desktop
+lang: both
+actions:
+  - {type: keys, combo: "win+ctrl+d"}

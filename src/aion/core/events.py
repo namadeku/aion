@@ -128,3 +128,48 @@ class LogRecord(Event):
     level: str
     message: str
     module: str = ""
+
+
+# -- work log ("Ход работы"), see docs/commands-api.md ---------------------------------------
+
+StepStatus = Literal["ok", "error", "cancelled", "skipped"]
+RunStatus = Literal["done", "error", "interrupted"]
+
+
+class RunStarted(Event):
+    """A request began: a dialog turn or a command started from the UI."""
+
+    run_id: str
+    title: str
+    source: Source
+
+
+class StepStarted(Event):
+    """One step of a run (an action of a command, a tool call of the LLM)."""
+
+    run_id: str
+    step_id: str
+    kind: str  # StepKind of the frontend: heard|listen|intent|tool|think|speak|reply|note|...
+    title: str
+    detail: str = ""
+
+
+class StepFinished(Event):
+    run_id: str
+    step_id: str
+    status: StepStatus
+    detail: str = ""
+
+
+class ConfirmRequested(Event):
+    """A dangerous step waits for "yes"/"no": by voice or with the buttons in the UI."""
+
+    run_id: str
+    step_id: str
+    question: str
+    timeout: float
+
+
+class RunFinished(Event):
+    run_id: str
+    status: RunStatus

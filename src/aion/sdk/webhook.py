@@ -18,6 +18,7 @@ from loguru import logger
 JsonHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
 MAX_BODY = 1 << 20
+READ_TIMEOUT_S = 10.0
 _OK = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 _BAD = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
@@ -27,7 +28,8 @@ async def serve_json(port: int, handler: JsonHandler, host: str = "127.0.0.1") -
 
     async def client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            body = await _read_body(reader)
+            async with asyncio.timeout(READ_TIMEOUT_S):  # a stalled client must not hold a slot
+                body = await _read_body(reader)
             payload = json.loads(body) if body else None
             if not isinstance(payload, dict):
                 writer.write(_BAD)
@@ -35,7 +37,7 @@ async def serve_json(port: int, handler: JsonHandler, host: str = "127.0.0.1") -
             writer.write(_OK)  # answer first: the game must not wait for our reaction
             await writer.drain()
             await handler(payload)  # pyright: ignore[reportUnknownArgumentType]
-        except (ValueError, asyncio.IncompleteReadError, ConnectionError):
+        except (ValueError, asyncio.IncompleteReadError, ConnectionError, TimeoutError):
             writer.write(_BAD)
         except Exception:
             logger.exception("Ошибка обработки данных игры")

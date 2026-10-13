@@ -17,15 +17,28 @@ class SpeechStart:
 
 
 @dataclass(frozen=True)
+class SpeechPause:
+    """A short silence inside an utterance (``pause_ms``): it may still continue.
+
+    Lets the recognizer start early; the result is valid if the utterance then ends
+    (:attr:`SpeechEnd.after_pause`) without any more speech.
+    """
+
+    audio: npt.NDArray[np.int16]
+
+
+@dataclass(frozen=True)
 class SpeechEnd:
     audio: npt.NDArray[np.int16]
+    #: a :class:`SpeechPause` was sent in the final silence and no speech followed it
+    after_pause: bool = False
 
     @property
     def duration(self) -> float:
         return len(self.audio) / SAMPLE_RATE
 
 
-SegmentEvent = SpeechStart | SpeechEnd
+SegmentEvent = SpeechStart | SpeechPause | SpeechEnd
 
 
 class Segmenter:
@@ -38,20 +51,43 @@ class Segmenter:
         pre_roll_ms: int = 300,
         max_utterance_s: float = 15.0,
         start_frames: int = 2,
+        pause_ms: int = 0,
     ) -> None:
         frame_ms = FRAME * 1000 / SAMPLE_RATE
-        self.threshold = threshold
-        self.release = max(0.0, threshold - 0.15)
-        self.silence_frames = max(1, round(min_silence_ms / frame_ms))
-        self.min_speech_frames = max(1, round(min_speech_ms / frame_ms))
-        self.max_frames = round(max_utterance_s * 1000 / frame_ms)
         self.start_frames = start_frames
+        self.configure(
+            threshold=threshold,
+            min_silence_ms=min_silence_ms,
+            max_utterance_s=max_utterance_s,
+            min_speech_ms=min_speech_ms,
+            pause_ms=pause_ms,
+        )
         self._pre_roll: deque[Frame] = deque(maxlen=max(1, round(pre_roll_ms / frame_ms)))
         self._frames: list[Frame] = []
         self._in_speech = False
         self._voiced_run = 0
         self._silent_run = 0
         self._voiced_total = 0
+        self._pause_sent = False
+
+    def configure(
+        self,
+        *,
+        threshold: float,
+        min_silence_ms: int,
+        max_utterance_s: float,
+        min_speech_ms: int = 250,
+        pause_ms: int = 0,
+    ) -> None:
+        """(Re)apply thresholds; safe to call between frames, keeps the utterance in progress."""
+        frame_ms = FRAME * 1000 / SAMPLE_RATE
+        self.threshold = threshold
+        self.release = max(0.0, threshold - 0.15)
+        self.silence_frames = max(1, round(min_silence_ms / frame_ms))
+        self.min_speech_frames = max(1, round(min_speech_ms / frame_ms))
+        self.max_frames = round(max_utterance_s * 1000 / frame_ms)
+        pause_frames = round(pause_ms / frame_ms) if pause_ms else 0
+        self.pause_frames = pause_frames if 0 < pause_frames < self.silence_frames else 0
 
     @property
     def in_speech(self) -> bool:
@@ -73,6 +109,7 @@ class Segmenter:
         self._frames = []  # a new list: _finish() keeps a reference to the old one
         self._in_speech = False
         self._voiced_run = self._silent_run = self._voiced_total = 0
+        self._pause_sent = False
 
     def push(self, frame: Frame, prob: float) -> SegmentEvent | None:
         if not self._in_speech:
@@ -91,10 +128,14 @@ class Segmenter:
         if prob >= self.release:
             self._silent_run = 0
             self._voiced_total += 1
+            self._pause_sent = False
         else:
             self._silent_run += 1
         if self._silent_run >= self.silence_frames or len(self._frames) >= self.max_frames:
             return self._finish()
+        if self.pause_frames and self._silent_run == self.pause_frames and not self._pause_sent:
+            self._pause_sent = True
+            return SpeechPause(np.concatenate(self._frames).astype(np.int16))
         return None
 
     def flush(self) -> SpeechEnd | None:
@@ -102,7 +143,7 @@ class Segmenter:
         return self._finish() if self._in_speech else None
 
     def _finish(self) -> SpeechEnd | None:
-        frames, voiced = self._frames, self._voiced_total
+        frames, voiced, after_pause = self._frames, self._voiced_total, self._pause_sent
         self.reset()
         if voiced < self.min_speech_frames:
             return SpeechEnd(np.zeros(0, dtype=np.int16))
@@ -110,4 +151,4 @@ class Segmenter:
         keep_tail = max(0, self.silence_frames - 5)
         if len(frames) > keep_tail:
             frames = frames[: len(frames) - keep_tail] if keep_tail else frames
-        return SpeechEnd(np.concatenate(frames).astype(np.int16))
+        return SpeechEnd(np.concatenate(frames).astype(np.int16), after_pause)

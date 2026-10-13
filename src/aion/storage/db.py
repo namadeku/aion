@@ -53,10 +53,23 @@ class Database:
     async def open(self) -> None:
         if isinstance(self.path, Path):
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = await aiosqlite.connect(self.path)
-        self._conn.row_factory = aiosqlite.Row
-        await self._conn.executescript(_SCHEMA)
-        await self._conn.commit()
+        conn = await aiosqlite.connect(self.path)
+        try:
+            conn.row_factory = aiosqlite.Row
+            # WAL + NORMAL: every write commits at once (see execute), and a full fsync per
+            # commit is what made small writes slow on Windows. WAL survives a crash intact.
+            async with conn.execute("PRAGMA journal_mode=WAL"):
+                pass
+            async with conn.execute("PRAGMA synchronous=NORMAL"):
+                pass
+            async with conn.execute("PRAGMA busy_timeout=5000"):
+                pass
+            await conn.executescript(_SCHEMA)
+            await conn.commit()
+        except BaseException:
+            await conn.close()  # do not leave the worker thread of a failed open running
+            raise
+        self._conn = conn
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -70,17 +83,18 @@ class Database:
         return self._conn
 
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> int:
-        cursor = await self.conn.execute(sql, tuple(params))
-        await self.conn.commit()
-        return cursor.lastrowid or cursor.rowcount
+        async with self.conn.execute(sql, tuple(params)) as cursor:
+            await self.conn.commit()
+            return cursor.lastrowid or cursor.rowcount
 
     async def fetchall(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         async with self.conn.execute(sql, tuple(params)) as cursor:
             return [dict(row) for row in await cursor.fetchall()]
 
     async def fetchone(self, sql: str, params: Iterable[Any] = ()) -> dict[str, Any] | None:
-        rows = await self.fetchall(sql, params)
-        return rows[0] if rows else None
+        async with self.conn.execute(sql, tuple(params)) as cursor:
+            row = await cursor.fetchone()
+        return dict(row) if row is not None else None
 
     def kv(self, namespace: str) -> KeyValueStore:
         return KeyValueStore(self, namespace)

@@ -6,11 +6,12 @@ The schema is the single source of truth for defaults: ``aion config init`` dump
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 def default_data_dir() -> Path:
@@ -60,9 +61,42 @@ class VoiceConfig(_Model):
     )
 
 
+PROCEDURAL_ANIMATION = "procedural"
+"""Animation mapping value: play the built-in procedural motion even if a clip exists."""
+
+_ANIMATION_SLOT = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,31}")
+_ANIMATION_FILE = re.compile(r"[^\\/:*?\"<>|\x00-\x1f]{1,120}\.vrma", re.IGNORECASE)
+
+
 class AvatarConfig(_Model):
-    kind: Literal["hud", "vrm", "live2d"] = "hud"
+    kind: Literal["hud", "orb", "vrm", "live2d"] = "hud"
     path: Path | None = None
+    animations: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Какой клип .vrma (файл рядом с моделью) играть для действия: "
+            "idle, wave, stretch… → имя файла или «procedural». "
+            "Без записи действует соглашение об именах (idle*.vrma, <действие>.vrma)"
+        ),
+    )
+
+    @field_validator("animations")
+    @classmethod
+    def _animation_files(cls, value: dict[str, str]) -> dict[str, str]:
+        """Only bare ``*.vrma`` file names next to the model: no paths, no traversal.
+
+        An empty value drops the entry (back to the naming convention): config patches are
+        deep-merged, so this is how a patch removes a key.
+        """
+        value = {slot: file for slot, file in value.items() if file}
+        for slot, file in value.items():
+            if not _ANIMATION_SLOT.fullmatch(slot):
+                raise ValueError(f"недопустимое имя действия: {slot!r}")
+            if file == PROCEDURAL_ANIMATION:
+                continue
+            if not _ANIMATION_FILE.fullmatch(file) or file.startswith(".") or ".." in file:
+                raise ValueError(f"{slot}: нужно имя файла .vrma рядом с моделью, без пути")
+        return value
 
 
 class Profile(_Model):
@@ -112,6 +146,24 @@ class AudioConfig(_Model):
         default="wake",
         description="Как перебивать: по имени, любой речью (нужны наушники) или никак",
     )
+    normalize: bool = Field(
+        default=True, description="Поднимать уровень тихой речи (до +30 дБ) перед распознаванием"
+    )
+    denoise: bool = Field(
+        default=False, description="Шумоподавление (спектральный гейт; помогает на ровном шуме)"
+    )
+    speculative_ms: int = Field(
+        default=250,
+        ge=0,
+        le=400,
+        description="Начать распознавание после такой паузы (мс), не ждать конца фразы; 0 — выкл.",
+    )
+    echo_holdoff_s: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=3.0,
+        description="Сколько секунд после своей речи считать услышанное эхом",
+    )
 
 
 class WakeWordConfig(_Model):
@@ -126,6 +178,16 @@ class WakeWordConfig(_Model):
         default=1.2, ge=0.5, le=3.0, description="Сколько секунд начала фразы проверять (stt)"
     )
     openwakeword_model: str = "hey_jarvis"
+    tail_name: bool = Field(
+        default=True,
+        description="Принимать имя в конце фразы («который час, Аион») для известных команд",
+    )
+    tail_check_max_s: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=15.0,
+        description="Макс. длина фразы для имени в конце (с); 0 — авто: 8 на GPU, 4 на CPU",
+    )
 
 
 class SttConfig(_Model):
@@ -135,6 +197,21 @@ class SttConfig(_Model):
         description="auto: large-v3-turbo на GPU, small на CPU; или tiny/base/small/medium",
     )
     device: Literal["auto", "cpu", "cuda"] = "auto"
+    compute_type: str = Field(
+        default="auto", description="auto, int8, int8_float16, float16 или float32"
+    )
+    beam_size: int = Field(default=0, ge=0, le=10, description="0 — авто: 5 на GPU, 1 на CPU")
+    cpu_threads: int = Field(default=0, ge=0, le=64, description="Потоки CPU для Whisper; 0 — авто")
+    bias: Literal["prompt", "hotwords", "none"] = Field(
+        default="prompt",
+        description="Как подсказывать Whisper имя и названия команд: промтом, hotwords или никак",
+    )
+    postprocess: bool = Field(
+        default=True, description="Исправлять частые ошибки распознавания и нормализовать числа"
+    )
+    corrections: dict[str, str] = Field(
+        default_factory=dict, description="Свой словарь исправлений: «как слышит» → «как надо»"
+    )
     vosk_model: str = "vosk-model-small-ru-0.22"
 
 
@@ -190,6 +267,22 @@ class InitiativeConfig(_Model):
         ge=0.5,
         le=30.0,
         description="Сколько ждать первую фразу LLM, прежде чем сказать готовую",
+    )
+
+
+class CommandsConfig(_Model):
+    """User commands and scenarios without code (see docs/commands-api.md)."""
+
+    enabled: bool = True
+    require_wake_name: bool = Field(
+        default=False,
+        description="Выполнять голосовые команды только после имени ассистента (режим префикса)",
+    )
+    confirm_timeout: float = Field(
+        default=15.0, ge=3.0, le=120.0, description="Сколько ждать подтверждения опасного действия"
+    )
+    shell_timeout: float = Field(
+        default=60.0, ge=1.0, le=600.0, description="Предельное время команды CMD/PowerShell"
     )
 
 
@@ -276,6 +369,7 @@ class Config(_Model):
     stt: SttConfig = Field(default_factory=SttConfig)
     llm: LlmConfig = Field(default_factory=LlmConfig)
     initiative: InitiativeConfig = Field(default_factory=InitiativeConfig)
+    commands: CommandsConfig = Field(default_factory=CommandsConfig)
     mcp: dict[str, McpServerConfig] = Field(
         default_factory=dict, description="Внешние MCP-серверы с инструментами для LLM"
     )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+import stat
 import tempfile
 import zipfile
 from collections.abc import Callable
@@ -227,10 +228,18 @@ def _extract_single_dir(archive: Path, target: Path) -> None:
     """Extract a zip whose content is one top-level folder into ``target``."""
     with tempfile.TemporaryDirectory(dir=target.parent, prefix=".extract-") as tmp_str:
         tmp = Path(tmp_str)
-        with zipfile.ZipFile(archive) as zf:
-            for member in zf.namelist():
+        try:
+            zf = zipfile.ZipFile(archive)
+        except zipfile.BadZipFile as e:
+            archive.unlink(missing_ok=True)  # a truncated download: fetch it afresh next time
+            raise ValueError("Архив модели повреждён — запустите загрузку ещё раз") from e
+        with zf:
+            for info in zf.infolist():
+                member = info.filename
                 if not (tmp / member).resolve().is_relative_to(tmp.resolve()):
                     raise ValueError(f"Небезопасный путь в архиве: {member}")
+                if stat.S_ISLNK(info.external_attr >> 16):
+                    raise ValueError(f"Символические ссылки в архиве запрещены: {member}")
             zf.extractall(tmp)
         entries = list(tmp.iterdir())
         source = entries[0] if len(entries) == 1 and entries[0].is_dir() else tmp

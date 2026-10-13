@@ -180,6 +180,16 @@ class Context:
         return self.turn.source
 
     @property
+    def named(self) -> bool:
+        """The phrase was addressed by the assistant's name (always True for typed text)."""
+        return self.turn.named
+
+    @property
+    def run_id(self) -> str:
+        """Id of this request in the work log ("Ход работы")."""
+        return self.turn.run_id
+
+    @property
     def config(self) -> dict[str, Any]:
         return self.plugin.config
 

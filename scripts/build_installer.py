@@ -21,6 +21,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,27 +29,39 @@ DIST = ROOT / "dist"
 BUILD = ROOT / "build"
 
 
-def find_iscc(explicit: str | None) -> Path:
-    if explicit:
-        return Path(explicit)
-    if found := shutil.which("iscc"):
-        return Path(found)
-    bases = [
-        os.environ.get("LOCALAPPDATA", ""),
-        os.environ.get("PROGRAMFILES(X86)", ""),
-        os.environ.get("PROGRAMFILES", ""),
-    ]
-    for base in filter(None, bases):
+def iscc_candidates(env: Mapping[str, str] | None = None) -> list[Path]:
+    """Usual ISCC.exe locations: Inno Setup installer folders, then Scoop apps."""
+    env = os.environ if env is None else env
+    home = env.get("USERPROFILE") or str(Path.home())
+    result: list[Path] = []
+    for base in (env.get("LOCALAPPDATA"), env.get("PROGRAMFILES(X86)"), env.get("PROGRAMFILES")):
+        if not base:
+            continue
         for sub in (
             "Programs/Inno Setup 7",
             "Programs/Inno Setup 6",
             "Inno Setup 7",
             "Inno Setup 6",
         ):
-            candidate = Path(base, sub, "ISCC.exe")
-            if candidate.exists():
-                return candidate
-    sys.exit("Не найден Inno Setup (ISCC.exe): https://jrsoftware.org/isdl.php")
+            result.append(Path(base, sub, "ISCC.exe"))
+    for scoop in filter(None, (env.get("SCOOP"), str(Path(home, "scoop")))):
+        for app in ("inno-setup", "innosetup"):
+            result.append(Path(scoop, "apps", app, "current", "ISCC.exe"))
+        result.append(Path(scoop, "shims", "iscc.exe"))
+    return result
+
+
+def find_iscc(explicit: str | None) -> Path:
+    if explicit:
+        return Path(explicit)
+    if found := shutil.which("iscc"):
+        return Path(found)
+    for candidate in iscc_candidates():
+        if candidate.exists():
+            return candidate
+    sys.exit(
+        "Не найден Inno Setup (ISCC.exe): scoop install inno-setup или https://jrsoftware.org/isdl.php"
+    )
 
 
 def default_models() -> list[tuple[str, str]]:

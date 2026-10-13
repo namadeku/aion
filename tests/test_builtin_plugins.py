@@ -4,6 +4,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+import httpx
 import pytest
 
 from aion.app import Aion
@@ -212,7 +213,37 @@ async def test_repeat_and_help(app: Aion) -> None:
     assert "погода" in help_text
 
 
+async def test_weather_retries_a_dropped_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise httpx.ConnectError("dropped", request=request)
+        return httpx.Response(200, json={"ok": True})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        weather.httpx,
+        "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
+    )
+    plugin = weather.Weather()
+    assert await plugin._get("https://example.test/forecast", {}) == {"ok": True}
+    assert calls == 2
+
+
 # -- timers ----------------------------------------------------------------------------
+
+
+def test_timer_duration_cases() -> None:
+    say_duration = load_builtin_module("timers", "main").say_duration
+
+    assert say_duration(60, accusative=True) == "1 минуту"
+    assert say_duration(61, accusative=True) == "1 минуту 1 секунду"
+    assert say_duration(120, accusative=True) == "2 минуты"
+    assert say_duration(60) == "1 минута"
 
 
 async def test_timer_fires(app: Aion) -> None:

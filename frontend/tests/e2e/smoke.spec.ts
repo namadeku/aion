@@ -29,7 +29,7 @@ test("without a token the API refuses", async ({ request }) => {
 });
 
 test("llm page saves event commentary settings", async ({ page }, info) => {
-  await page.goto(`/?token=${TOKEN}#/llm`);
+  await page.goto(`/?token=${TOKEN}#/settings/llm`);
   const panel = page.locator(".panel", { hasText: "Комментарии к событиям" });
   await expect(panel).toBeVisible();
   const slider = panel.locator('input[type="range"]').first();
@@ -65,7 +65,7 @@ test("home shows the character's mood", async ({ page }, info) => {
 
 test("mcp servers can be added and removed", async ({ page }, info) => {
   page.on("dialog", (d) => void d.accept());
-  await page.goto(`/?token=${TOKEN}#/plugins`);
+  await page.goto(`/?token=${TOKEN}#/settings/mcp`);
   const mcp = page.locator(".panel", { hasText: "MCP-серверы" });
   await expect(mcp).toBeVisible();
   const name = `e2e${info.project.name}`;
@@ -79,4 +79,75 @@ test("mcp servers can be added and removed", async ({ page }, info) => {
   await page.screenshot({ path: info.outputPath("mcp.png"), fullPage: true });
   await row.getByRole("button", { name: "Удалить" }).click();
   await expect(row).toHaveCount(0);
+});
+
+test("rail reaches every section and settings tabs", async ({ page }) => {
+  await page.goto(`/?token=${TOKEN}`);
+  const rail = page.getByRole("navigation", { name: "Разделы" });
+  for (const [name, heading] of [
+    ["Консоль", "Консоль"],
+    ["Плагины", "Плагины"],
+    ["История", "История"],
+    ["Настройки", "Голос и персонаж"],
+  ]) {
+    await rail.getByRole("link", { name }).click();
+    await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
+    await expect(rail.getByRole("link", { name })).toHaveAttribute("aria-current", "page");
+  }
+  const tabs = page.getByRole("navigation", { name: "Настройки" });
+  for (const [tab, heading] of [
+    ["Микрофон", /микрофон/i],
+    ["LLM", /Языковая модель/],
+    ["MCP", "MCP"],
+    ["О программе", "О программе"],
+  ] as const) {
+    await tabs.getByRole("link", { name: tab }).click();
+    await expect(page.getByRole("heading", { level: 1, name: heading })).toBeVisible();
+  }
+  // old addresses still work
+  await page.goto(`/#/voice`);
+  await expect(page.getByRole("heading", { level: 1, name: "Голос и персонаж" })).toBeVisible();
+});
+
+test("theme switches without reload and is remembered", async ({ page }) => {
+  await page.goto(`/?token=${TOKEN}`);
+  const html = page.locator("html");
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Светлая тема" }).click();
+  await expect(html).toHaveAttribute("data-theme", "light");
+  await page.reload();
+  await expect(html).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Тёмная тема" }).click();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+});
+
+test("work log shows the steps of a request", async ({ page }) => {
+  await page.goto(`/?token=${TOKEN}`);
+  await expect(page.getByText("соединение есть")).toBeAttached();
+  const input = page.getByLabel("Сообщение");
+  await input.fill("сколько будет три плюс три");
+  await input.press("Enter");
+  const log = page.getByRole("region", { name: "Ход работы" });
+  await expect(log).toBeVisible();
+  await expect(log.getByRole("button", { name: /Ход работы/ })).toHaveAttribute(
+    "aria-expanded",
+    "false",
+  );
+  await log.getByRole("button", { name: /Ход работы/ }).click();
+  await expect(log.getByText("Получен запрос")).toBeVisible();
+  await expect(log.getByText(/«сколько будет три плюс три»/)).toBeVisible();
+  await expect(log.locator(".worklog-status")).toHaveText("Готово", { timeout: 15_000 });
+});
+
+test("input bar: code mode toggle and text-only mode without voice", async ({ page }) => {
+  await page.goto(`/?token=${TOKEN}`);
+  const code = page.getByRole("button", { name: "Режим команды или кода" });
+  await expect(code).toHaveAttribute("aria-pressed", "false");
+  await code.click();
+  await expect(code).toHaveAttribute("aria-pressed", "true");
+  // the backend runs with --no-voice: only text input is possible
+  await expect(page.getByLabel("Режим ввода")).toHaveValue("text");
+  await expect(page.getByLabel("Режим ввода")).toBeDisabled();
+  // no desktop window bridge in a browser: no window buttons
+  await expect(page.getByRole("button", { name: "Закрыть" })).toHaveCount(0);
 });
