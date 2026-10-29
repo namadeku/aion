@@ -11,7 +11,8 @@ export function avatarKeyOf(config: AvatarConfig): string {
 }
 
 /**
- * Creates the configured avatar. The orb needs WebGL (three.js, loaded lazily). VRM/Live2D are loaded lazily (big libraries) and fall back
+ * Creates the configured avatar. The orb needs WebGL (three.js, loaded lazily). The holographic bust is
+ * a procedural 2D drawing (no model). VRM/Live2D are loaded lazily (big libraries) and fall back
  * to the holographic HUD ring when the model is missing or fails to load.
  */
 export async function createAvatar(
@@ -25,6 +26,14 @@ export async function createAvatar(
       return new OrbAvatar(canvas, options);
     } catch (err) {
       console.error(err); // no WebGL: fall back to the 2D ring below
+    }
+  }
+  if (config.kind === "holo") {
+    try {
+      const { HoloAvatar } = await import("./holo");
+      return new HoloAvatar(canvas, options);
+    } catch (err) {
+      console.error(err); // no 2D canvas: fall back to the HUD ring below
     }
   }
   if ((config.kind === "vrm" || config.kind === "live2d") && config.path) {

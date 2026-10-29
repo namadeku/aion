@@ -9,7 +9,7 @@ export interface HistoryEntry {
 }
 
 export interface AvatarConfig {
-  kind: "hud" | "orb" | "vrm" | "live2d";
+  kind: "hud" | "orb" | "vrm" | "live2d" | "holo";
   path: string | null;
   /** Action → .vrma file next to the model, or "procedural" (see avatar/actions.ts). */
   animations?: Record<string, string>;

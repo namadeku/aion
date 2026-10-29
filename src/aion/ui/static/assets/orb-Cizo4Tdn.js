@@ -1,4 +1,4 @@
-import{i as e,l as t}from"./index-CDx8-O9O.js";import{N as n,U as r,at as i,b as a,f as o,ft as s,l as c,n as l,pt as u,rt as d,u as f,v as p}from"./three.module-t1RpZedE.js";var m={idle:{amp:.035,gain:0,freq:2.2,speed:.35,spin:.07,band:0,glow:.6},listening:{amp:.04,gain:.32,freq:3,speed:.8,spin:.1,band:0,glow:.85},thinking:{amp:.05,gain:0,freq:2.6,speed:1.1,spin:.55,band:1,glow:.8},speaking:{amp:.035,gain:.42,freq:3.4,speed:1.4,spin:.14,band:0,glow:.95}},h=44,g=64,_=128,v=2600,y=1.42,b=5.05,x=.17,S=.3,C=`
+import{i as e,l as t}from"./index-BDWGbuVQ.js";import{N as n,U as r,at as i,b as a,f as o,ft as s,l as c,n as l,pt as u,rt as d,u as f,v as p}from"./three.module-t1RpZedE.js";var m={idle:{amp:.035,gain:0,freq:2.2,speed:.35,spin:.07,band:0,glow:.6},listening:{amp:.04,gain:.32,freq:3,speed:.8,spin:.1,band:0,glow:.85},thinking:{amp:.05,gain:0,freq:2.6,speed:1.1,spin:.55,band:1,glow:.8},speaking:{amp:.035,gain:.42,freq:3.4,speed:1.4,spin:.14,band:0,glow:.95}},h=44,g=64,_=128,v=2600,y=1.42,b=5.05,x=.17,S=.3,C=`
   uniform float uPhase;
   uniform float uAmp;
   uniform float uLevel;

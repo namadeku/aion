@@ -52,6 +52,7 @@ export const icons = {
   user: '<circle cx="12" cy="8.5" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6L7 7M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4"/>',
   moon: '<path d="M19.5 14.5A7.5 7.5 0 0 1 9.5 4.5a7.5 7.5 0 1 0 10 10z"/>',
+  chip: '<path d="M9 6h7l2 2v10H8l-2-2V9zM9.5 2.5V6M14.5 2.5V6M9.5 18v3.5M14.5 18v3.5M2.5 10H6M2.5 14H6M18 10h3.5M18 14h3.5"/><path d="M10 10h4v4h-4z"/>',
   minimize: '<path d="M6 12h12"/>',
   maximize: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
   close: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',

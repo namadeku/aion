@@ -27,7 +27,7 @@ class VoicePreset(BaseModel):
     voice: str
     rate: float = Field(default=1.0, ge=0.5, le=2.0)
     pitch: float = Field(default=0.0, ge=-12.0, le=12.0)
-    effect: Literal["none", "metallic", "radio"] = "none"
+    effect: Literal["none", "metallic", "radio", "digital"] = "none"
     license: str = ""
     non_commercial: bool = False
     online: bool = False

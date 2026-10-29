@@ -49,6 +49,13 @@ def test_default_hotkey_is_valid_pynput_syntax() -> None:
     assert len(keyboard.HotKey.parse(hotkey)) == 3
 
 
+def test_avatar_kind_holo_is_accepted() -> None:
+    config = Config.model_validate({"profiles": {"aion": {"avatar": {"kind": "holo"}}}})
+    assert config.profile.avatar.kind == "holo"
+    with pytest.raises(ValidationError):
+        Config.model_validate({"profiles": {"aion": {"avatar": {"kind": "hologram"}}}})
+
+
 def test_icon_is_generated(tmp_path: Path) -> None:
     from aion.ui.desktop import ensure_icon
 

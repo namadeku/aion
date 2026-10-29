@@ -10,7 +10,7 @@
 # Edge TTS is an online Microsoft service: presets on it carry `online: true`.
 # Names are our own; no third-party characters, trademarks or voice samples.
 #
-# Fields: id, title, description, engine, voice, rate, pitch, effect (none|metallic|radio),
+# Fields: id, title, description, engine, voice, rate, pitch, effect (none|metallic|radio|digital),
 # license (of the voice), non_commercial (default false), online (default false).
 
 presets:
@@ -105,5 +105,27 @@ presets:
     rate: 0.92
     pitch: 0.0
     effect: none
+    license: CC BY-NC-SA 4.0
+    non_commercial: true
+
+  - id: neira
+    title: Нейра
+    description: Спокойный женский голос цифрового ИИ, только для некоммерческого использования.
+    engine: silero
+    voice: baya
+    rate: 1.0
+    pitch: 1.0
+    effect: digital
+    license: CC BY-NC-SA 4.0
+    non_commercial: true
+
+  - id: neira_clear
+    title: Нейра (чистый тембр)
+    description: Более звонкий вариант голоса цифрового ИИ, только для некоммерческого использования.
+    engine: silero
+    voice: xenia
+    rate: 1.0
+    pitch: 1.0
+    effect: digital
     license: CC BY-NC-SA 4.0
     non_commercial: true

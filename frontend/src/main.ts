@@ -10,9 +10,17 @@ import "@fontsource/inter/latin-600.css";
 import "@fontsource/inter/cyrillic-600.css";
 import "@fontsource/jetbrains-mono/latin-400.css";
 import "@fontsource/jetbrains-mono/cyrillic-400.css";
+// neon theme only: @font-face files download when the theme first uses them
+import "@fontsource/tektur/latin-500.css";
+import "@fontsource/tektur/cyrillic-500.css";
+import "@fontsource/tektur/latin-600.css";
+import "@fontsource/tektur/cyrillic-600.css";
+import "@fontsource/martian-mono/latin-400.css";
+import "@fontsource/martian-mono/cyrillic-400.css";
 import "./tokens.css";
 import "./style.css";
 import "./pages.css";
+import "./theme-neon.css";
 
 import { debugMode, desktopMode, token } from "./api";
 import { logoMark } from "./brand";
@@ -20,11 +28,18 @@ import { sharedWorkLog } from "./components/worklog-shared";
 import { h, iconButton, icons, svgIcon, toast } from "./dom";
 import { native, type ResizeEdge } from "./native";
 import "./pages/index";
-import { applyTheme, getTheme, toggleTheme } from "./prefs";
+import { applyTheme, nextTheme, toggleTheme, type Theme } from "./prefs";
 import { currentPath, resolve, sectionPages, sections, type PageRoute } from "./routes";
 import { store } from "./store";
 
 applyTheme();
+
+const THEME_LABELS: Record<Theme, string> = {
+  dark: "Тёмная тема",
+  light: "Светлая тема",
+  neon: "Неоновая тема",
+};
+const THEME_ICONS: Record<Theme, string> = { dark: icons.moon, light: icons.sun, neon: icons.chip };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 
@@ -183,9 +198,10 @@ function startApp(): void {
   }
 
   function renderChrome(): void {
-    const theme = getTheme();
-    const label = theme === "dark" ? "Светлая тема" : "Тёмная тема";
-    themeBtn.replaceChildren(svgIcon(theme === "dark" ? icons.sun : icons.moon));
+    // the button names and shows the theme it switches to
+    const next = nextTheme();
+    const label = THEME_LABELS[next];
+    themeBtn.replaceChildren(svgIcon(THEME_ICONS[next]));
     themeBtn.setAttribute("aria-label", label);
     themeBtn.title = label;
 

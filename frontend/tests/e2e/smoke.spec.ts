@@ -109,7 +109,7 @@ test("rail reaches every section and settings tabs", async ({ page }) => {
   await expect(page.getByRole("heading", { level: 1, name: "Голос и персонаж" })).toBeVisible();
 });
 
-test("theme switches without reload and is remembered", async ({ page }) => {
+test("theme cycles dark → light → neon without reload and is remembered", async ({ page }) => {
   await page.goto(`/?token=${TOKEN}`);
   const html = page.locator("html");
   await expect(html).toHaveAttribute("data-theme", "dark");
@@ -117,8 +117,20 @@ test("theme switches without reload and is remembered", async ({ page }) => {
   await expect(html).toHaveAttribute("data-theme", "light");
   await page.reload();
   await expect(html).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Неоновая тема" }).click();
+  await expect(html).toHaveAttribute("data-theme", "neon");
+  // the neon tokens apply
+  const accent = (): Promise<string> =>
+    html.evaluate((el) => getComputedStyle(el).getPropertyValue("--accent").trim());
+  expect(await accent()).toBe("#f5e60a");
+  await page.reload();
+  await expect(html).toHaveAttribute("data-theme", "neon");
   await page.getByRole("button", { name: "Тёмная тема" }).click();
   await expect(html).toHaveAttribute("data-theme", "dark");
+  await page.reload();
+  await expect(html).toHaveAttribute("data-theme", "dark");
+  expect(await accent()).toBe("#38bdf0");
+  await expect(page.getByRole("button", { name: "Светлая тема" })).toBeVisible();
 });
 
 test("work log shows the steps of a request", async ({ page }) => {

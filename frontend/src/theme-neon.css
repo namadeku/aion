@@ -1,0 +1,496 @@
+/*
+ * Neon theme: a night-city HUD. Colours are tokens (tokens.css, [data-theme="neon"]); this file
+ * only adds what the other themes do not have — chamfered corners, HUD labels, scanlines and a
+ * rare glitch on the wordmark. Every rule is scoped to the neon theme, so dark and light are
+ * untouched.
+ *
+ * Shapes: clip-path cuts two opposite corners. It also cuts borders, outlines and outer shadows,
+ * so the cut edge is redrawn with a gradient (--edge), glows are inset and focus rings are drawn
+ * inside the element. Elements that host popovers or tooltips (.composer, .rail) are not clipped;
+ * they get HUD corner brackets instead.
+ */
+
+:root[data-theme="neon"] {
+  --cut-lg: 14px;
+  --cut-md: 10px;
+  --cut-sm: 7px;
+  --glow-2: rgba(0, 229, 255, 0.35);
+  --glow-accent: rgba(245, 230, 10, 0.4);
+  --magenta: #ff2bd6;
+}
+
+/* ---------------------------------------------------------------- chamfer shapes */
+
+/* shape A: top-right and bottom-left corners cut (containers) */
+:root[data-theme="neon"]
+  :is(.panel, .plugin-card, .preset-card, .pack-card, .msg.user .bubble, .toast, .banner) {
+  --cut: var(--cut-lg);
+  --edge: var(--line-strong);
+  border-radius: 0;
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--cut)) 0,
+    100% var(--cut),
+    100% 100%,
+    var(--cut) 100%,
+    0 calc(100% - var(--cut))
+  );
+  background-image:
+    linear-gradient(
+      225deg,
+      transparent 50%,
+      var(--edge) 50%,
+      var(--edge) calc(50% + 1.2px),
+      transparent calc(50% + 1.2px)
+    ),
+    linear-gradient(
+      45deg,
+      transparent 50%,
+      var(--edge) 50%,
+      var(--edge) calc(50% + 1.2px),
+      transparent calc(50% + 1.2px)
+    );
+  background-size: var(--cut) var(--cut);
+  background-position:
+    top right,
+    bottom left;
+  background-repeat: no-repeat;
+  background-origin: border-box;
+}
+
+/* shape B: top-left and bottom-right corners cut (controls) */
+:root[data-theme="neon"] :is(.btn, .chip, .subnav a, .send-btn, .msg-avatar) {
+  --cut: var(--cut-sm);
+  --edge: transparent;
+  border-radius: 0;
+  clip-path: polygon(
+    var(--cut) 0,
+    100% 0,
+    100% calc(100% - var(--cut)),
+    calc(100% - var(--cut)) 100%,
+    0 100%,
+    0 var(--cut)
+  );
+  background-image:
+    linear-gradient(
+      135deg,
+      transparent 50%,
+      var(--edge) 50%,
+      var(--edge) calc(50% + 1.2px),
+      transparent calc(50% + 1.2px)
+    ),
+    linear-gradient(
+      315deg,
+      transparent 50%,
+      var(--edge) 50%,
+      var(--edge) calc(50% + 1.2px),
+      transparent calc(50% + 1.2px)
+    );
+  background-size: var(--cut) var(--cut);
+  background-position:
+    top left,
+    bottom right;
+  background-repeat: no-repeat;
+  background-origin: border-box;
+}
+
+/* clip-path would hide an outer focus ring: draw it inside */
+:root[data-theme="neon"]
+  :is(
+    .btn,
+    .chip,
+    .subnav a,
+    .send-btn,
+    .panel,
+    .plugin-card,
+    .preset-card,
+    .pack-card
+  ):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -4px;
+}
+
+/* ---------------------------------------------------------------- HUD corner brackets */
+
+:root[data-theme="neon"] :is(.composer, .rail) {
+  --bracket: var(--accent-2);
+  --bl: 12px;
+  background-image:
+    linear-gradient(var(--bracket), var(--bracket)),
+    linear-gradient(var(--bracket), var(--bracket)),
+    linear-gradient(var(--bracket), var(--bracket)),
+    linear-gradient(var(--bracket), var(--bracket)),
+    linear-gradient(var(--bracket), var(--bracket)),
+    linear-gradient(var(--bracket), var(--bracket)),
+    linear-gradient(var(--bracket), var(--bracket)), linear-gradient(var(--bracket), var(--bracket));
+  background-size:
+    var(--bl) 1px,
+    1px var(--bl),
+    var(--bl) 1px,
+    1px var(--bl),
+    var(--bl) 1px,
+    1px var(--bl),
+    var(--bl) 1px,
+    1px var(--bl);
+  background-position:
+    top left,
+    top left,
+    top right,
+    top right,
+    bottom left,
+    bottom left,
+    bottom right,
+    bottom right;
+  background-repeat: no-repeat;
+}
+
+:root[data-theme="neon"] .composer:focus-within {
+  --bracket: var(--accent);
+  border-color: var(--accent-line);
+  box-shadow:
+    0 0 0 1px var(--accent-soft),
+    0 0 20px -8px var(--glow-accent);
+}
+
+/* ---------------------------------------------------------------- type */
+
+:root[data-theme="neon"] .page h1 {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+:root[data-theme="neon"] :is(.panel h2, .thread-empty-title, .orb-name) {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+/* a yellow tick marks each section heading */
+:root[data-theme="neon"] .panel h2::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 10px;
+  vertical-align: 0.05em;
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+
+/* HUD labels: small mono caps */
+:root[data-theme="neon"]
+  :is(.field > span, .field > .field-label, .msg .meta, .mood-row, .orb-state-label) {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+:root[data-theme="neon"] :is(.btn, .chip, .subnav a) {
+  font-family: var(--font-display);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* ---------------------------------------------------------------- chrome */
+
+:root[data-theme="neon"] .wordmark {
+  position: relative;
+  font-weight: 600;
+  color: var(--accent);
+  text-shadow: 0 0 14px var(--glow-accent);
+}
+
+/* the glitch: two offset copies flash for a fraction of a second every few seconds */
+:root[data-theme="neon"] .wordmark::before,
+:root[data-theme="neon"] .wordmark::after {
+  content: "AION" / "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  text-shadow: none;
+}
+
+:root[data-theme="neon"] .wordmark::before {
+  color: var(--accent-2);
+  animation: neon-glitch-a 7s steps(1, end) infinite;
+}
+
+:root[data-theme="neon"] .wordmark::after {
+  color: var(--magenta);
+  animation: neon-glitch-b 7s steps(1, end) infinite;
+}
+
+@keyframes neon-glitch-a {
+  0%,
+  91%,
+  95.5% {
+    opacity: 0;
+    transform: none;
+    clip-path: none;
+  }
+  92% {
+    opacity: 0.9;
+    transform: translate(-3px, 0);
+    clip-path: inset(10% 0 55% 0);
+  }
+  93.5% {
+    opacity: 0.9;
+    transform: translate(2px, 0);
+    clip-path: inset(60% 0 8% 0);
+  }
+}
+
+@keyframes neon-glitch-b {
+  0%,
+  91.5%,
+  95.5% {
+    opacity: 0;
+    transform: none;
+    clip-path: none;
+  }
+  92.5% {
+    opacity: 0.85;
+    transform: translate(3px, 0);
+    clip-path: inset(45% 0 25% 0);
+  }
+  94.5% {
+    opacity: 0.85;
+    transform: translate(-2px, 0);
+    clip-path: inset(0 0 70% 0);
+  }
+}
+
+:root[data-theme="neon"] .rail-logo {
+  filter: drop-shadow(0 0 8px var(--glow-accent));
+}
+
+:root[data-theme="neon"] .rail-item.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+:root[data-theme="neon"] .rail-item.active::before {
+  border-radius: 0;
+  box-shadow: 0 0 10px var(--glow-accent);
+}
+
+:root[data-theme="neon"] .rail-item[data-tip]::after {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+:root[data-theme="neon"] .subnav a.active {
+  --edge: var(--accent-line);
+  color: var(--accent);
+  background-color: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+:root[data-theme="neon"] .icon-btn.close:hover {
+  color: var(--accent-ink);
+}
+
+/* scanlines over the whole window; never in the transparent desktop-mascot window */
+:root[data-theme="neon"]:not(.desktop-mode) body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.022) 0 1px,
+    transparent 1px 3px
+  );
+}
+
+/* ---------------------------------------------------------------- surfaces */
+
+:root[data-theme="neon"] .panel {
+  box-shadow: inset 0 0 40px -20px var(--glow-2);
+}
+
+:root[data-theme="neon"] :is(.plugin-card, .preset-card, .pack-card) {
+  --cut: var(--cut-md);
+  --edge: var(--line);
+}
+
+:root[data-theme="neon"] .plugin-card:hover {
+  --edge: var(--line-strong);
+}
+
+:root[data-theme="neon"] .preset-card.current {
+  --edge: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+
+:root[data-theme="neon"] .btn {
+  --edge: transparent;
+}
+
+:root[data-theme="neon"] .btn:not(.ghost, .danger):hover {
+  filter: none;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+}
+
+:root[data-theme="neon"] .btn.ghost {
+  --edge: var(--line-strong);
+  border-color: var(--line-strong);
+  color: var(--accent-2);
+}
+
+:root[data-theme="neon"] .btn.ghost:hover {
+  --edge: var(--accent-2);
+  border-color: var(--accent-2);
+  box-shadow: inset 0 0 14px -4px var(--glow-2);
+}
+
+:root[data-theme="neon"] .btn.ghost[aria-pressed="true"] {
+  --edge: var(--accent-line);
+  color: var(--accent);
+}
+
+:root[data-theme="neon"] .btn.danger {
+  --edge: color-mix(in srgb, var(--danger) 45%, transparent);
+}
+
+:root[data-theme="neon"] .chip {
+  --edge: var(--line-strong);
+  --cut: 6px;
+}
+
+:root[data-theme="neon"] .chip[aria-pressed="true"] {
+  --edge: var(--accent-line);
+}
+
+:root[data-theme="neon"] :is(input, select, textarea):not(.composer-input):focus-visible {
+  border-color: var(--accent-2);
+  box-shadow:
+    0 0 0 1px var(--accent-2),
+    0 0 16px -4px var(--glow-2);
+}
+
+/* tags are too small to chamfer: square chips */
+:root[data-theme="neon"] .tag {
+  border-radius: 0;
+}
+
+/* switches stay round: a pill reads as a toggle */
+:root[data-theme="neon"] .switch input:checked + span {
+  box-shadow: 0 0 12px -2px var(--glow-accent);
+}
+
+/* ---------------------------------------------------------------- chat */
+
+:root[data-theme="neon"] .msg.user .bubble {
+  --cut: var(--cut-md);
+  --edge: var(--line-strong);
+  border: 1px solid var(--line-strong);
+  border-right: 2px solid var(--accent-2);
+}
+
+:root[data-theme="neon"] .msg-avatar {
+  --cut: 6px;
+  border-radius: 0;
+}
+
+:root[data-theme="neon"] .msg.user .msg-avatar {
+  color: var(--accent-2);
+}
+
+:root[data-theme="neon"] .send-btn {
+  --cut: 10px;
+  border-radius: 0;
+}
+
+:root[data-theme="neon"] .send-btn:not([aria-disabled="true"]):hover {
+  filter: none;
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4);
+}
+
+:root[data-theme="neon"] .send-btn[aria-disabled="true"] {
+  --edge: var(--line-strong);
+  opacity: 1;
+  background-color: var(--raised);
+  color: var(--text-faint);
+  box-shadow: inset 0 0 0 1px var(--line-strong);
+}
+
+:root[data-theme="neon"] .mic-btn.live {
+  color: var(--accent-2);
+  background: rgba(0, 229, 255, 0.1);
+  box-shadow:
+    0 0 0 1px var(--accent-2),
+    0 0 14px -2px var(--glow-2);
+}
+
+:root[data-theme="neon"] .code-toggle[aria-pressed="true"] {
+  color: var(--accent-2);
+  background: rgba(0, 229, 255, 0.1);
+}
+
+:root[data-theme="neon"] .toast {
+  --cut: var(--cut-md);
+  border-radius: 0;
+}
+
+/* ---------------------------------------------------------------- avatar panel */
+
+:root[data-theme="neon"] .orb-panel {
+  background:
+    radial-gradient(closest-side at 50% 44%, rgba(245, 230, 10, 0.08), transparent 100%),
+    linear-gradient(to top, rgba(0, 229, 255, 0.06), transparent 40%), var(--window);
+}
+
+:root[data-theme="neon"] :is(.orb-panel[data-look="vrm"], .orb-panel[data-look="live2d"]) {
+  background: var(--window);
+}
+
+:root[data-theme="neon"] .orb-dot {
+  border-radius: 0;
+  transform: rotate(45deg);
+}
+
+:root[data-theme="neon"] .orb-panel[data-state="listening"] .orb-dot {
+  box-shadow: 0 0 8px var(--orb-listening);
+}
+
+:root[data-theme="neon"] .orb-panel[data-state="thinking"] .orb-dot {
+  box-shadow: 0 0 8px var(--orb-thinking);
+}
+
+:root[data-theme="neon"] .orb-panel[data-state="speaking"] .orb-dot {
+  box-shadow: 0 0 8px var(--accent);
+}
+
+:root[data-theme="neon"] .mood-row b {
+  height: 4px;
+  border-radius: 0;
+  background: rgba(0, 229, 255, 0.12);
+}
+
+:root[data-theme="neon"] .mood-row i {
+  background: var(--accent-2);
+}
+
+:root[data-theme="neon"] .mood-row[data-key="affection"] i {
+  background: var(--accent);
+}
+
+/* ---------------------------------------------------------------- motion */
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="neon"] .wordmark::before,
+  :root[data-theme="neon"] .wordmark::after {
+    animation: none;
+    display: none;
+  }
+}

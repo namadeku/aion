@@ -135,7 +135,7 @@ def say(
     phrase: Annotated[str, typer.Argument(help="Что сказать")],
     engine: Annotated[str | None, typer.Option(help="piper / silero / edge / xtts")] = None,
     voice: Annotated[str | None, typer.Option(help="Голос движка")] = None,
-    effect: Annotated[str | None, typer.Option(help="none / metallic / radio")] = None,
+    effect: Annotated[str | None, typer.Option(help="none / metallic / radio / digital")] = None,
     save: Annotated[Path | None, typer.Option(help="Сохранить в WAV вместо проигрывания")] = None,
     config: ConfigOption = None,
 ) -> None:

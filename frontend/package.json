@@ -1,7 +1,7 @@
 {
   "name": "aion-ui",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -28,6 +28,8 @@
     "@fontsource/exo-2": "^5.3.0",
     "@fontsource/inter": "^5.3.0",
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@fontsource/martian-mono": "^5.3.0",
+    "@fontsource/tektur": "^5.3.0",
     "@pixiv/three-vrm": "^3.5.5",
     "@pixiv/three-vrm-animation": "^3.5.5",
     "pixi-live2d-display": "^0.4.0",

@@ -1298,7 +1298,8 @@ code {
 }
 
 .orb-panel[data-look="vrm"],
-.orb-panel[data-look="live2d"] {
+.orb-panel[data-look="live2d"],
+.orb-panel[data-look="holo"] {
   background: var(--window);
 }
 
@@ -1318,7 +1319,8 @@ code {
 
 /* full-height characters may use the area under the title bar */
 .orb-panel[data-look="vrm"] .orb-stage,
-.orb-panel[data-look="live2d"] .orb-stage {
+.orb-panel[data-look="live2d"] .orb-stage,
+.orb-panel[data-look="holo"] .orb-stage {
   margin-top: 0;
 }
 
@@ -1806,7 +1808,8 @@ code {
   }
 
   .orb-panel[data-look="vrm"] .orb-stage,
-  .orb-panel[data-look="live2d"] .orb-stage {
+  .orb-panel[data-look="live2d"] .orb-stage,
+  .orb-panel[data-look="holo"] .orb-stage {
     flex-basis: 110px;
   }
 

@@ -15,12 +15,14 @@ const EFFECTS: [string, string][] = [
   ["none", "без эффекта"],
   ["metallic", "металлический (как у Джарвиса)"],
   ["radio", "рация"],
+  ["digital", "цифровой (голограмма)"],
 ];
 const AVATARS: [string, string][] = [
   ["hud", "Голографический круг (HUD)"],
   ["orb", "Орб — каркасная сфера"],
   ["vrm", "3D-модель VRM"],
   ["live2d", "Live2D (.model3.json)"],
+  ["holo", "Голограмма «Нейра» (2D)"],
 ];
 
 const PRESET_SAMPLE = "Добрый вечер. Все системы работают в штатном режиме.";

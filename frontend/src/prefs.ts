@@ -2,7 +2,10 @@
 // The backend config has no field for them; storage may be unavailable, so every access is
 // guarded and falls back to the default.
 
-export type Theme = "dark" | "light";
+export type Theme = "dark" | "light" | "neon";
+
+/** The order the title-bar button cycles through. */
+export const THEMES: readonly Theme[] = ["dark", "light", "neon"];
 /** How the user talks to the assistant: voice and text, voice only, or text only (mic muted). */
 export type InputMode = "hybrid" | "voice" | "text";
 
@@ -41,7 +44,7 @@ function changed(): void {
 
 export function getTheme(): Theme {
   const saved = read("theme");
-  return saved === "light" || saved === "dark" ? saved : "dark";
+  return THEMES.find((t) => t === saved) ?? "dark";
 }
 
 export function applyTheme(theme: Theme = getTheme()): void {
@@ -54,8 +57,13 @@ export function setTheme(theme: Theme): void {
   changed();
 }
 
+/** The theme after `theme` in the cycle dark → light → neon → dark. */
+export function nextTheme(theme: Theme = getTheme()): Theme {
+  return THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+}
+
 export function toggleTheme(): Theme {
-  const next: Theme = getTheme() === "dark" ? "light" : "dark";
+  const next = nextTheme();
   setTheme(next);
   return next;
 }

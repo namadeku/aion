@@ -55,7 +55,7 @@ class VoiceConfig(_Model):
     rate: float = Field(default=1.0, ge=0.5, le=2.0, description="Скорость речи")
     pitch: float = Field(default=0.0, ge=-12.0, le=12.0, description="Сдвиг высоты тона, полутоны")
     volume: float = Field(default=1.0, ge=0.0, le=2.0)
-    effect: Literal["none", "metallic", "radio"] = "none"
+    effect: Literal["none", "metallic", "radio", "digital"] = "none"
     reference_wav: Path | None = Field(
         default=None, description="Образец голоса для клонирования (XTTS)"
     )
@@ -69,7 +69,7 @@ _ANIMATION_FILE = re.compile(r"[^\\/:*?\"<>|\x00-\x1f]{1,120}\.vrma", re.IGNOREC
 
 
 class AvatarConfig(_Model):
-    kind: Literal["hud", "orb", "vrm", "live2d"] = "hud"
+    kind: Literal["hud", "orb", "vrm", "live2d", "holo"] = "hud"
     path: Path | None = None
     animations: dict[str, str] = Field(
         default_factory=dict,
